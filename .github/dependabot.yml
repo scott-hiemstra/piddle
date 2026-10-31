@@ -5,7 +5,23 @@ updates:
     directory: /
     schedule:
       interval: weekly
+
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # gtk-rs crates are versioned in lockstep (gtk4 0.11 <-> glib/cairo/
+      # pango 0.22, ...). Bumped one at a time they mix incompatible type
+      # generations and fail to build, so always update them together.
+      gtk-rs:
+        patterns:
+          - "gtk4*"
+          - "gdk4*"
+          - "gsk4*"
+          - "glib*"
+          - "gio*"
+          - "gobject-sys"
+          - "cairo*"
+          - "pango*"
+          - "graphene*"

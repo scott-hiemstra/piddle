@@ -14,4 +14,4 @@ path = "src/main.rs"
 piddle-core = { path = "../piddle-core" }
 gtk = { version = "0.9", package = "gtk4", features = ["v4_14"] }
 pangocairo = "0.20"
-cairo-rs = { version = "0.20", features = ["png"] }
+cairo-rs = { version = "0.22", features = ["png"] }

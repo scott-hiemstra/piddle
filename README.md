@@ -41,14 +41,19 @@ Hover a bubble for CPU, memory and thread count. Click it to open the details wi
 
 ## Install
 
-Build a Debian package and install it:
+Each script builds the release binary and wraps it, together with the launcher entry, README and license, in a native package:
 
-```sh
-packaging/build-deb.sh                                  # → target/debian/piddle_<version>_<arch>.deb
-sudo apt install ./target/debian/piddle_0.1.0_amd64.deb
-```
+| Distribution | Build | Install | Remove |
+|---|---|---|---|
+| Debian, Ubuntu | `packaging/build-deb.sh` | `sudo apt install ./target/debian/piddle_0.1.0_amd64.deb` | `sudo apt remove piddle` |
+| Fedora, RHEL, openSUSE | `packaging/build-rpm.sh` | `sudo dnf install ./target/rpm/piddle-0.1.0-1.x86_64.rpm` | `sudo dnf remove piddle` |
+| Arch Linux | `packaging/build-arch.sh` | `sudo pacman -U target/arch/piddle-0.1.0-1-x86_64.pkg.tar.zst` | `sudo pacman -R piddle` |
 
-This installs `/usr/bin/piddle` and a launcher entry ("PIDdle" in your app menu). Remove it with `sudo apt remove piddle`. The package's dependencies are worked out from the binary with `dpkg-shlibdeps`.
+All three install `/usr/bin/piddle` and a "PIDdle" entry in the app menu. They need GTK 4.14 or newer and glibc 2.34 or newer.
+
+- **Dependencies:** the `.deb` gets them from `dpkg-shlibdeps` and the RPM from rpmbuild's library scan. The Arch package declares `gtk4>=4.14`, `glib2`, `cairo`, `pango`, `graphene`, `glibc` and `gcc-libs`.
+- **Building on any distro:** the scripts don't have to run on the target distribution. On Debian you need `rpm` for the RPM and `makepkg` plus `pacman-package-manager` for the Arch package.
+- **Tested:** the RPM installs on Fedora 43 and the Arch package on current Arch Linux, each with all libraries resolved.
 
 ## Build and run from source
 
@@ -77,7 +82,7 @@ crates/
     details.rs      details window, CPU history, confirm / type-to-confirm dialogs
     main.rs         window, header controls, sidebar, theming, wiring
 data/               desktop entry
-packaging/          build-deb.sh
+packaging/          build-deb.sh, build-rpm.sh, build-arch.sh (+ common.sh)
 ```
 
 A future Ratatui TUI only needs to depend on `piddle-core`, for example:

@@ -104,7 +104,9 @@ A live process list with system CPU and memory meters. Each row shows:
 - **Blocked:** PID 1 (init) and kernel threads can't be signalled at all.
 - **Critical:** for desktop-session and core system processes (`gnome-shell`, `systemd`, `Xwayland`, `dbus`, `sddm`, `NetworkManager`, `pipewire` and so on), PIDdle itself, and any process PIDdle runs inside, you have to type the process name to confirm.
 - **Everything else:** a confirmation that defaults to No. It mentions how many child processes there are and suggests Terminate before Force Kill.
-- **PID reuse:** the process's start time is checked again right before `kill(2)`, so a PID that now belongs to a different process is never signalled.
+- **PID reuse:** before signalling, PIDdle confirms the PID still belongs to the process you picked (same start time).
+  - On **Linux 5.3 and newer** this is race-free: the signal goes through a pidfd opened before that check, so if the PID is recycled the signal can't reach the new process.
+  - On **older kernels** there are no pidfds. PIDdle checks and then calls `kill(2)`, which leaves a very small window in which the PID could be recycled between the two steps.
 - These rules live in `piddle_core::actions::assess`, so both interfaces get them.
 
 You can only signal other users' processes when PIDdle runs with the right privileges. Use `sudo piddle` for that: as root, the launcher starts the terminal interface rather than the GUI, because running a GUI toolkit as root is a needless risk (`--gui` overrides).
@@ -112,7 +114,7 @@ You can only signal other users' processes when PIDdle runs with the right privi
 ## Security
 
 - **Untrusted text is neutralized.** Process names, command lines and executable paths are chosen by whoever starts a process, so they may contain terminal escape sequences, carriage returns or Unicode bidirectional overrides. PIDdle replaces control characters with `�` and drops bidi controls before anything is displayed. A hostile process name can't rewrite your terminal or disguise itself. The GUI also escapes every value it puts into Pango markup.
-- **Signals can't hit the wrong process.** Terminate and Force Kill open a pidfd, verify the process's start time, then signal through the pidfd (Linux 5.3+). A recycled PID is never signalled; older kernels fall back to check-then-`kill`.
+- **Signals are bound to the process you chose.** On Linux 5.3+, Terminate and Force Kill open a pidfd, verify the process's start time, then signal through the pidfd, so a recycled PID can't receive the signal. Older kernels have no pidfds: there PIDdle verifies the start time and then calls `kill(2)`, which narrows the PID-reuse race to the moment between those two calls but doesn't eliminate it.
 - **No root GUI by default**, see above. The launcher and terminal UI are small static binaries with no GUI libraries.
 - **Release builds:** every GitHub Action is pinned to a full commit SHA, only the final publish step can write to the repository, and pull requests from forks run with a read-only token. Dependabot proposes updates for actions and crates, and `cargo audit` reports no known vulnerabilities in the dependencies.
 
@@ -125,6 +127,8 @@ You can only signal other users' processes when PIDdle runs with the right privi
 
 ## Install
 
+**[Download the latest release](https://github.com/scott-hiemstra/piddle/releases/latest)**: packages for Debian/Ubuntu (`.deb`), Fedora/RHEL/openSUSE (`.rpm`) and Arch Linux, for x86_64 and ARM64.
+
 There are two packages:
 
 | Package | Contains | Dependencies |
@@ -132,26 +136,36 @@ There are two packages:
 | `piddle` | `piddle` launcher, `piddle-tui` | none (static binaries); works on any Linux of its architecture |
 | `piddle-gui` | `piddle-gui`, app-menu entry | GTK 4.14+, glibc 2.34+, `piddle` |
 
-On a server, install `piddle`. On a desktop, install both. Packages are built for **x86_64** and **ARM64** (`amd64`/`arm64` for Debian, `x86_64`/`aarch64` for RPM and Arch); the table shows the x86_64 names.
+On a server, download and install `piddle`. On a desktop, install both. Then install the downloaded files:
 
-| Distribution | Build | Install |
-|---|---|---|
-| Debian, Ubuntu | `packaging/build-deb.sh` | `sudo apt install ./target/debian/piddle_0.3.2_amd64.deb ./target/debian/piddle-gui_0.3.2_amd64.deb` |
-| Fedora, RHEL, openSUSE | `packaging/build-rpm.sh` | `sudo dnf install ./target/rpm/piddle-0.3.2-1.x86_64.rpm ./target/rpm/piddle-gui-0.3.2-1.x86_64.rpm` |
-| Arch Linux | `packaging/build-arch.sh` | `sudo pacman -U target/arch/piddle-0.3.2-1-x86_64.pkg.tar.zst target/arch/piddle-gui-0.3.2-1-x86_64.pkg.tar.zst` |
+| Distribution | Install (x86_64 file names; ARM64 uses `arm64` / `aarch64`) |
+|---|---|
+| Debian, Ubuntu | `sudo apt install ./piddle_0.3.2_amd64.deb ./piddle-gui_0.3.2_amd64.deb` |
+| Fedora, RHEL, openSUSE | `sudo dnf install ./piddle-0.3.2-1.x86_64.rpm ./piddle-gui-0.3.2-1.x86_64.rpm` |
+| Arch Linux | `sudo pacman -U piddle-0.3.2-1-x86_64.pkg.tar.zst piddle-gui-0.3.2-1-x86_64.pkg.tar.zst` |
 
 Remove with `apt remove`, `dnf remove` or `pacman -R` and the package names.
 
 - **Static terminal binaries:** `piddle` and `piddle-tui` are built for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`. They have no runtime dependencies, so they run on older servers too (tested on Debian 12 and Ubuntu 22.04, and on ARM64 Debian 12).
 - **GUI dependencies:** for `piddle-gui` they come from `dpkg-shlibdeps` and rpmbuild's library scan. The Arch package declares them explicitly.
 - **Upgrading from 0.1.0**, where `piddle` was the GUI: the `.deb` and `.rpm` move the app-menu entry to `piddle-gui` cleanly. The RPM also installs `piddle-gui` automatically on upgrade.
-- **Architectures:** the scripts build for the machine they run on. Set `PIDDLE_ARCH=aarch64` (or `x86_64`) together with `PIDDLE_SKIP_BUILD=1` to package binaries built elsewhere; the GUI can't be cross-compiled because it links that architecture's GTK.
-- **Building on any distro:** the scripts don't have to run on the target distribution. You need the musl target (`rustup target add x86_64-unknown-linux-musl`). On Debian you also need `rpm` for the RPMs, and `makepkg` plus `pacman-package-manager` for the Arch packages.
 - **Tested:**
   - Debian 12 server: `piddle` only, no GTK pulled in.
   - Debian 13 and Fedora 43: upgrade from 0.1.0.
   - Fedora 43: `piddle` only.
   - Arch Linux: both packages, with all libraries resolved.
+  - ARM64 Debian 13 and Fedora 43 (emulated): both packages, with all libraries resolved.
+
+### Building the packages yourself
+
+| Distribution | Build | Output |
+|---|---|---|
+| Debian, Ubuntu | `packaging/build-deb.sh` | `target/debian/` |
+| Fedora, RHEL, openSUSE | `packaging/build-rpm.sh` | `target/rpm/` |
+| Arch Linux | `packaging/build-arch.sh` | `target/arch/` |
+
+- **Architectures:** the scripts build for the machine they run on. Set `PIDDLE_ARCH=aarch64` (or `x86_64`) together with `PIDDLE_SKIP_BUILD=1` to package binaries built elsewhere; the GUI can't be cross-compiled because it links that architecture's GTK.
+- **Building on any distro:** the scripts don't have to run on the target distribution. You need the musl target (`rustup target add x86_64-unknown-linux-musl`). On Debian you also need `rpm` for the RPMs, and `makepkg` plus `pacman-package-manager` for the Arch packages.
 
 ### Releases
 
@@ -182,7 +196,7 @@ crates/
   piddle-core/      UI-independent; depends only on libc and async-channel
     sampler.rs      /proc sampling: Sampler (synchronous) or spawn() (background thread)
     encode.rs       CPU → color, memory → radius, formatting helpers
-    actions.rs      risk assessment (assess), PID-reuse-safe signalling, state names
+    actions.rs      risk assessment (assess), signalling via pidfd (PID-reuse guard), state names
     net.rs          a process's network connections, from /proc/<pid>/fd and /proc/<pid>/net
     examples/top.rs minimal plain-text example
   piddle-gui/       GTK 4 interface (binary `piddle-gui`)

@@ -27,29 +27,59 @@ impl Signal {
 }
 
 /// Send `sig` to `pid`, but only if it is still the same process that was
-/// observed (same start time). This guards against PID reuse between the
-/// moment the user picked a process and the moment they confirmed.
+/// observed (same start time).
+///
+/// On Linux 5.3+ this is race-free: a pidfd is opened first, which pins that
+/// exact process, then its identity is checked, then the signal goes through
+/// the pidfd. If the PID was recycled before the pidfd was opened, the check
+/// fails; if it is recycled afterwards, the pidfd still refers to the original
+/// process, so a stranger can never be signalled. Older kernels fall back to
+/// check-then-kill(2).
 pub fn send_signal(pid: i32, start_ticks: u64, sig: Signal) -> Result<(), String> {
     if pid <= 1 {
         return Err(format!("Refusing to signal PID {pid}."));
     }
-    if start_ticks_of(pid) != Some(start_ticks) {
-        return Err(format!("PID {pid} has already exited."));
-    }
-    // SAFETY: kill(2) with a positive pid only targets that single process.
-    let rc = unsafe { libc::kill(pid, sig.raw()) };
-    if rc == 0 {
-        return Ok(());
-    }
-    let err = std::io::Error::last_os_error();
-    Err(match err.raw_os_error() {
-        Some(libc::EPERM) => {
-            format!(
-                "Permission denied: PID {pid} belongs to another user. Run PIDdle with sufficient privileges to signal it."
-            )
+    let exited = || format!("PID {pid} has already exited.");
+
+    // SAFETY: pidfd_open takes a pid and flags, returns an fd or -1.
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    let rc = if fd >= 0 {
+        let fd = fd as libc::c_int;
+        let same = start_ticks_of(pid) == Some(start_ticks);
+        // SAFETY: fd is a pidfd we own; a null siginfo means "like kill(2)".
+        let rc = if same {
+            unsafe { libc::syscall(libc::SYS_pidfd_send_signal, fd, sig.raw(), std::ptr::null::<libc::siginfo_t>(), 0) }
+        } else {
+            0
+        };
+        let err = std::io::Error::last_os_error();
+        // SAFETY: closing the fd we opened above.
+        unsafe { libc::close(fd) };
+        if !same {
+            return Err(exited());
         }
-        Some(libc::ESRCH) => format!("PID {pid} has already exited."),
-        _ => format!("kill({pid}) failed: {err}"),
+        if rc == 0 { Ok(()) } else { Err(err) }
+    } else {
+        let err = std::io::Error::last_os_error();
+        match err.raw_os_error() {
+            Some(libc::ESRCH) => return Err(exited()),
+            // No pidfd support: check, then kill(2).
+            Some(libc::ENOSYS) => {
+                if start_ticks_of(pid) != Some(start_ticks) {
+                    return Err(exited());
+                }
+                // SAFETY: kill(2) with a positive pid only targets that single process.
+                if unsafe { libc::kill(pid, sig.raw()) } == 0 { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+            }
+            _ => Err(err),
+        }
+    };
+    rc.map_err(|err| match err.raw_os_error() {
+        Some(libc::EPERM) => {
+            format!("Permission denied: PID {pid} belongs to another user. Run PIDdle with sufficient privileges to signal it.")
+        }
+        Some(libc::ESRCH) => exited(),
+        _ => format!("Signalling PID {pid} failed: {err}"),
     })
 }
 
@@ -186,7 +216,7 @@ pub fn fmt_age(s: u64) -> String {
 
 /// Executable path, if readable (other users' processes usually are not).
 pub fn exe_path(pid: i32) -> Option<String> {
-    std::fs::read_link(format!("/proc/{pid}/exe")).ok().map(|p| p.display().to_string())
+    std::fs::read_link(format!("/proc/{pid}/exe")).ok().map(|p| crate::encode::sanitize(&p.display().to_string()))
 }
 
 #[cfg(test)]
@@ -239,6 +269,29 @@ mod tests {
         let mut k = proc(2, 0, "kthreadd");
         k.kthread = true;
         assert!(assess(&k, &procs, self_pid).blocked.is_some());
+    }
+
+    #[test]
+    fn signals_the_verified_process_only() {
+        // A real child we are allowed to signal.
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id() as i32;
+        let ticks = start_ticks_of(pid).unwrap();
+        // Wrong identity: refused, child untouched.
+        assert!(send_signal(pid, ticks + 1, Signal::Terminate).is_err());
+        assert!(child.try_wait().unwrap().is_none());
+        // Right identity: delivered.
+        send_signal(pid, ticks, Signal::Terminate).unwrap();
+        let status = child.wait().unwrap();
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(libc::SIGTERM));
+        // Gone now: reported as exited, not an error about something else.
+        assert!(send_signal(pid, ticks, Signal::Terminate).unwrap_err().contains("exited"));
+    }
+
+    #[test]
+    fn pid_one_is_refused() {
+        assert!(send_signal(1, 0, Signal::Terminate).is_err());
     }
 
     #[test]

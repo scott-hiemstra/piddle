@@ -13,6 +13,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::encode::sanitize;
+
 /// Kernel thread flag from `include/linux/sched.h`.
 const PF_KTHREAD: u64 = 0x0020_0000;
 
@@ -288,15 +290,17 @@ impl Sampler {
     fn load_static(&mut self, pid: i32, st: &Stat) -> Cached {
         let raw = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
         let args: Vec<&[u8]> = raw.split(|&b| b == 0).filter(|a| !a.is_empty()).collect();
-        let cmdline: String = args.iter().map(|a| String::from_utf8_lossy(a)).collect::<Vec<_>>().join(" ");
+        // Everything here is chosen by whoever started the process: sanitize
+        // before it can reach a terminal or a label.
+        let cmdline: String = sanitize(&args.iter().map(|a| String::from_utf8_lossy(a)).collect::<Vec<_>>().join(" "));
 
         // argv[0] basename. Some programs (Chromium, sshd) rewrite argv into a
         // single space-separated string, so cut at the first space in that case.
         let argv0 = args.first().map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
         let argv0 = if args.len() == 1 { argv0.split(' ').next().unwrap_or("").to_string() } else { argv0 };
-        let base = argv0.rsplit('/').next().unwrap_or("").trim_end_matches(':').to_string();
+        let base = sanitize(argv0.rsplit('/').next().unwrap_or("").trim_end_matches(':'));
 
-        let comm = &st.comm;
+        let comm = &sanitize(&st.comm);
         // comm is truncated to 15 bytes; prefer the full argv[0] name when it extends comm.
         let name = if comm.len() >= 15 && base.starts_with(comm.as_str()) { base.clone() } else { comm.clone() };
         let app = if base.is_empty() || st.flags & PF_KTHREAD != 0 { comm.clone() } else { base };

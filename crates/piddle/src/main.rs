@@ -6,6 +6,7 @@
 
 use std::ffi::OsString;
 use std::io::IsTerminal;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
@@ -21,7 +22,8 @@ piddle: visual process viewer
 
 Usage: piddle [--gui | --tui] [OPTIONS]
 
-  (no flag)    graphical interface if a display is available, else terminal
+  (no flag)    graphical interface if a display is available, else terminal;
+               as root, the terminal interface (use --gui to override)
   -g, --gui    graphical interface (piddle-gui)
   -t, --tui    terminal interface (piddle-tui); remaining options go to it,
                e.g. piddle --tui --interval 500
@@ -60,6 +62,14 @@ fn main() {
             if !has_display() {
                 exec("piddle-tui", &rest);
             }
+            // A GUI toolkit has a large attack surface; don't run one as root
+            // unless explicitly asked to (sudo is how you signal others' processes).
+            if is_root() {
+                if std::io::stderr().is_terminal() {
+                    eprintln!("piddle: running as root, so starting the terminal interface (use --gui to override).");
+                }
+                exec("piddle-tui", &rest);
+            }
             let Some(gui) = find("piddle-gui") else {
                 note("the graphical interface (piddle-gui) is not installed");
                 exec("piddle-tui", &rest);
@@ -83,6 +93,11 @@ fn main() {
             }
         }
     }
+}
+
+/// Effective UID 0? /proc/self is owned by the process's effective user.
+fn is_root() -> bool {
+    std::fs::metadata("/proc/self").map(|m| m.uid() == 0).unwrap_or(false)
 }
 
 fn has_display() -> bool {

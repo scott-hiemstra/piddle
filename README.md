@@ -16,7 +16,7 @@ The terminal interface uses the same CPU colors in a live, sortable process list
 ## Usage
 
 ```sh
-piddle          # graphical interface if a display is available, otherwise the terminal interface
+piddle          # graphical interface if a display is available, otherwise the terminal interface (as root: terminal)
 piddle --tui    # terminal interface (e.g. over SSH); options are passed on: piddle --tui --interval 500
 piddle --gui    # graphical interface
 ```
@@ -107,7 +107,14 @@ A live process list with system CPU and memory meters. Each row shows:
 - **PID reuse:** the process's start time is checked again right before `kill(2)`, so a PID that now belongs to a different process is never signalled.
 - These rules live in `piddle_core::actions::assess`, so both interfaces get them.
 
-You can only signal other users' processes when PIDdle runs with the right privileges.
+You can only signal other users' processes when PIDdle runs with the right privileges. Use `sudo piddle` for that: as root, the launcher starts the terminal interface rather than the GUI, because running a GUI toolkit as root is a needless risk (`--gui` overrides).
+
+## Security
+
+- **Untrusted text is neutralized.** Process names, command lines and executable paths are chosen by whoever starts a process, so they may contain terminal escape sequences, carriage returns or Unicode bidirectional overrides. PIDdle replaces control characters with `�` and drops bidi controls before anything is displayed. A hostile process name can't rewrite your terminal or disguise itself. The GUI also escapes every value it puts into Pango markup.
+- **Signals can't hit the wrong process.** Terminate and Force Kill open a pidfd, verify the process's start time, then signal through the pidfd (Linux 5.3+). A recycled PID is never signalled; older kernels fall back to check-then-`kill`.
+- **No root GUI by default**, see above. The launcher and terminal UI are small static binaries with no GUI libraries.
+- **Release builds:** every GitHub Action is pinned to a full commit SHA, only the final publish step can write to the repository, and pull requests from forks run with a read-only token. Dependabot proposes updates for actions and crates, and `cargo audit` reports no known vulnerabilities in the dependencies.
 
 ## Low overhead
 

@@ -43,6 +43,22 @@ fn lerp(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
 }
 
+/// Make text from other processes safe to display. Process names, command
+/// lines and paths are chosen by whoever started the process, so they may
+/// contain terminal escape sequences, carriage returns or bidirectional
+/// overrides that could rewrite a terminal or disguise a name. Control
+/// characters become `�` and bidi controls are dropped; ordinary Unicode is kept.
+pub fn sanitize(s: &str) -> String {
+    if !s.chars().any(|c| c.is_control() || is_bidi_control(c)) {
+        return s.to_string();
+    }
+    s.chars().filter(|&c| !is_bidi_control(c)).map(|c| if c.is_control() { '\u{FFFD}' } else { c }).collect()
+}
+
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{061C}')
+}
+
 pub fn fmt_bytes(b: u64) -> String {
     let b = b as f64;
     const K: f64 = 1024.0;
@@ -86,6 +102,18 @@ mod tests {
         assert_eq!(cpu_color(0.0), CPU_STOPS[0].1);
         assert_eq!(cpu_color(100.0), CPU_STOPS[4].1);
         assert_eq!(cpu_color(400.0), CPU_STOPS[4].1);
+    }
+
+    #[test]
+    fn sanitize_neutralizes_escapes_and_bidi() {
+        assert_eq!(sanitize("firefox"), "firefox");
+        assert_eq!(sanitize("crème brûlée 🍮"), "crème brûlée 🍮");
+        assert_eq!(
+            sanitize("evil\x1b]2;title\x07\x1b[31mred\r\nx"),
+            "evil\u{FFFD}]2;title\u{FFFD}\u{FFFD}[31mred\u{FFFD}\u{FFFD}x"
+        );
+        assert_eq!(sanitize("a\u{9b}31m"), "a\u{FFFD}31m"); // C1 CSI
+        assert_eq!(sanitize("\u{202E}gpj.exe"), "gpj.exe");
     }
 
     #[test]

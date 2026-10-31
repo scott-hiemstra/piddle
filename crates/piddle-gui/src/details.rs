@@ -112,7 +112,10 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
     let grid = gtk::Grid::builder().row_spacing(8).column_spacing(18).build();
     grid.add_css_class("details-card");
     let mut values: Vec<(&'static str, gtk::Label)> = Vec::new();
-    for (row, key) in ["Parent", "User", "Started", "Priority", "Virtual size", "Executable"].into_iter().enumerate() {
+    for (row, key) in ["Parent", "User", "Service", "Cgroup", "Started", "Priority", "Virtual size", "Executable"]
+        .into_iter()
+        .enumerate()
+    {
         let k = gtk::Label::builder().label(key).xalign(0.0).yalign(0.0).build();
         k.add_css_class("info-key");
         // Equal minimum and maximum width: GTK takes the window's minimum
@@ -345,6 +348,8 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
                         None => p.ppid.to_string(),
                     },
                     "User" => format!("{}  (uid {})", p.user, p.uid),
+                    "Service" => p.service.describe(),
+                    "Cgroup" => p.service.path.to_string(),
                     "Started" => started.clone(),
                     "Priority" => format!("nice {}", p.nice),
                     "Virtual size" => fmt_bytes(p.vsize),

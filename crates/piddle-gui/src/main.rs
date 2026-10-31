@@ -169,12 +169,13 @@ searchentry { min-width: 260px; }
 
 fn main() -> glib::ExitCode {
     silence_foreign_config_warning();
-    // Headless render for testing/docs: piddle-gui --snapshot out.png [free|app|parent|tree] [query]
+    // Headless render for testing/docs: piddle-gui --snapshot out.png [free|app|service|parent|tree] [query]
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--snapshot") {
         let path = args.get(2).map(String::as_str).unwrap_or("piddle.png");
         let layout = match args.get(3).map(String::as_str) {
             Some("app") => Layout::App,
+            Some("service") => Layout::Service,
             Some("parent") => Layout::Parent,
             Some("tree") => Layout::Tree,
             _ => Layout::Free,
@@ -274,7 +275,7 @@ fn build_ui(app: &gtk::Application) {
     header.pack_start(&search);
     header.pack_start(&matches);
 
-    let layout_dd = gtk::DropDown::from_strings(&["Free", "By application", "By parent", "Process tree"]);
+    let layout_dd = gtk::DropDown::from_strings(&["Free", "By application", "By service", "By parent", "Process tree"]);
     layout_dd.set_tooltip_text(Some("Arrange bubbles"));
     let interval_dd = gtk::DropDown::from_strings(&["250 ms", "500 ms", "1 s", "2 s"]);
     interval_dd.set_selected(1);
@@ -561,8 +562,9 @@ fn build_ui(app: &gtk::Application) {
         move |d| {
             let l = match d.selected() {
                 1 => Layout::App,
-                2 => Layout::Parent,
-                3 => Layout::Tree,
+                2 => Layout::Service,
+                3 => Layout::Parent,
+                4 => Layout::Tree,
                 _ => Layout::Free,
             };
             anim.view.borrow_mut().set_layout(l);

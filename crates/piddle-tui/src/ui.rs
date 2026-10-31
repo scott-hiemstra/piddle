@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use piddle_core::actions::{exe_path, fmt_age, state_name};
 use piddle_core::encode::{cpu_color, fmt_bytes, fmt_cpu, fmt_rate};
 use piddle_core::net;
+use piddle_core::service::ServiceKind;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -18,6 +19,17 @@ const DIM: Color = Color::Rgb(130, 140, 160);
 const ACCENT: Color = Color::Rgb(242, 201, 76);
 const BORDER: Color = Color::Rgb(60, 68, 84);
 const SELECT_BG: Color = Color::Rgb(38, 46, 64);
+
+/// Service kind tags, matching the GUI's hull tints.
+fn kind_color(k: ServiceKind) -> Color {
+    match k {
+        ServiceKind::System => Color::Rgb(150, 175, 230),
+        ServiceKind::User => Color::Rgb(115, 215, 140),
+        ServiceKind::Scope => Color::Rgb(190, 150, 250),
+        ServiceKind::Container => Color::Rgb(240, 130, 205),
+        ServiceKind::Kernel | ServiceKind::Other => DIM,
+    }
+}
 
 /// Map an RGB color to what the terminal supports.
 pub struct Palette {
@@ -167,14 +179,17 @@ fn draw_table(f: &mut Frame, app: &mut App, pal: &Palette, area: Rect) {
         .rows
         .iter()
         .map(|r| match r {
-            Row::Group { label, count, cpu, rss, io, collapsed, .. } => {
+            Row::Group { label, kind, count, cpu, rss, io, collapsed, .. } => {
                 let c = pal.cpu(*cpu as f64);
+                let mut name = Vec::with_capacity(3);
+                if let Some(k) = kind {
+                    name.push(Span::styled(format!("{:<9} ", k.label()), Style::new().fg(pal.fix(kind_color(*k)))));
+                }
+                name.push(Span::styled(label.clone(), Style::new().add_modifier(Modifier::BOLD)));
+                name.push(Span::styled(format!("  ×{count}"), Style::new().fg(pal.fix(DIM))));
                 let mut cells = vec![
                     Cell::from(if *collapsed { "▸" } else { "▾" }),
-                    Cell::from(Line::from(vec![
-                        Span::styled(label.clone(), Style::new().add_modifier(Modifier::BOLD)),
-                        Span::styled(format!("  ×{count}"), Style::new().fg(pal.fix(DIM))),
-                    ])),
+                    Cell::from(Line::from(name)),
                     Cell::from(""),
                     Cell::from(Span::styled(fmt_cpu(*cpu as f64), Style::new().fg(c).add_modifier(Modifier::BOLD))),
                     Cell::from(Span::styled(cpu_bar(*cpu as f64, 10), Style::new().fg(c))),
@@ -367,6 +382,11 @@ fn draw_details(f: &mut Frame, app: &App, pal: &Palette) {
             }),
         ]),
         Line::from(vec![label("Parent"), Span::raw(parent)]),
+        Line::from(vec![
+            label("Service"),
+            Span::styled(p.service.describe(), Style::new().fg(pal.fix(kind_color(p.service.kind)))),
+        ]),
+        Line::from(vec![label("Cgroup"), Span::styled(p.service.path.to_string(), Style::new().fg(pal.fix(DIM)))]),
         Line::from(vec![label("Started"), Span::raw(started)]),
         Line::from(vec![label("Executable"), Span::raw(exe_path(p.pid).unwrap_or_else(|| "not accessible".into()))]),
         Line::from(vec![
@@ -516,7 +536,7 @@ fn draw_help(f: &mut Frame, pal: &Palette) {
         ("Enter", "details (or collapse a group)"),
         ("Space", "collapse / expand group or tree branch"),
         ("/", "search name, command or PID; Esc clears"),
-        ("v or 1–4", "view: list, by application, by parent, tree"),
+        ("v or 1–5", "view: list, by application, by service, by parent, tree"),
         ("s", "sort: CPU, memory, disk I/O, PID, name"),
         ("i", "show / hide disk I/O columns"),
         ("a", "active processes only"),

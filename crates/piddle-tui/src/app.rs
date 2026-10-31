@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use piddle_core::actions::{Assessment, Signal, assess, send_signal};
 use piddle_core::net::{Sockets, sockets_of};
 use piddle_core::sampler::{Control, ProcInfo, Snapshot};
+use piddle_core::service::ServiceKind;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
 
@@ -23,6 +24,7 @@ pub const INTERVALS: [u64; 4] = [250, 500, 1000, 2000];
 pub enum View {
     List,
     App,
+    Service,
     Parent,
     Tree,
 }
@@ -32,6 +34,7 @@ impl View {
         match self {
             View::List => "list",
             View::App => "by application",
+            View::Service => "by service",
             View::Parent => "by parent",
             View::Tree => "tree",
         }
@@ -39,7 +42,8 @@ impl View {
     fn next(self) -> Self {
         match self {
             View::List => View::App,
-            View::App => View::Parent,
+            View::App => View::Service,
+            View::Service => View::Parent,
             View::Parent => View::Tree,
             View::Tree => View::List,
         }
@@ -77,8 +81,21 @@ impl Sort {
 }
 
 pub enum Row {
-    Group { key: String, label: String, count: usize, cpu: f32, rss: u64, io: (f64, f64), collapsed: bool },
-    Proc { info: ProcInfo, prefix: String },
+    Group {
+        key: String,
+        label: String,
+        /// Set in the service view.
+        kind: Option<ServiceKind>,
+        count: usize,
+        cpu: f32,
+        rss: u64,
+        io: (f64, f64),
+        collapsed: bool,
+    },
+    Proc {
+        info: ProcInfo,
+        prefix: String,
+    },
 }
 
 pub enum Mode {
@@ -216,7 +233,7 @@ impl App {
         }
         let q = self.query.to_lowercase();
         let numeric = q.bytes().all(|c| c.is_ascii_digit());
-        (numeric && p.pid.to_string().starts_with(&q)) || p.search_text.contains(&q)
+        (numeric && p.pid.to_string().starts_with(&q)) || p.search_text.contains(&q) || p.service.search.contains(&q)
     }
 
     fn cmp(&self, a: &ProcInfo, b: &ProcInfo) -> std::cmp::Ordering {
@@ -240,26 +257,29 @@ impl App {
             View::List => {
                 rows.extend(procs.iter().map(|p| Row::Proc { info: (*p).clone(), prefix: String::new() }));
             }
-            View::App | View::Parent => {
-                let mut groups: Vec<(String, String, Vec<&ProcInfo>)> = Vec::new();
+            View::App | View::Service | View::Parent => {
+                let mut groups: Vec<(String, String, Option<ServiceKind>, Vec<&ProcInfo>)> = Vec::new();
                 let mut index: HashMap<String, usize> = HashMap::new();
                 for p in &procs {
-                    let (key, label) = match self.view {
-                        View::App => (p.app.to_string(), p.app.to_string()),
+                    let (key, label, kind) = match self.view {
+                        View::App => (p.app.to_string(), p.app.to_string(), None),
+                        View::Service => {
+                            (format!("s{}", p.service.key), p.service.label.to_string(), Some(p.service.kind))
+                        }
                         _ => {
                             let label = match self.names.get(&p.ppid) {
                                 Some(n) => format!("{n} ({})", p.ppid),
                                 None if p.ppid == 0 => "kernel".to_string(),
                                 None => format!("PID {}", p.ppid),
                             };
-                            (format!("p{}", p.ppid), label)
+                            (format!("p{}", p.ppid), label, None)
                         }
                     };
                     let i = *index.entry(key.clone()).or_insert_with(|| {
-                        groups.push((key, label, Vec::new()));
+                        groups.push((key, label, kind, Vec::new()));
                         groups.len() - 1
                     });
-                    groups[i].2.push(p);
+                    groups[i].3.push(p);
                 }
                 let sum =
                     |g: &Vec<&ProcInfo>| (g.iter().map(|p| p.cpu).sum::<f32>(), g.iter().map(|p| p.rss).sum::<u64>());
@@ -267,19 +287,19 @@ impl App {
                     g.iter().filter_map(|p| p.io).fold((0.0, 0.0), |(r, w), io| (r + io.read_rate, w + io.write_rate))
                 };
                 groups.sort_by(|a, b| {
-                    let ((ca, ma), (cb, mb)) = (sum(&a.2), sum(&b.2));
+                    let ((ca, ma), (cb, mb)) = (sum(&a.3), sum(&b.3));
                     match self.sort {
                         Sort::Cpu => cb.total_cmp(&ca).then(mb.cmp(&ma)),
                         Sort::Mem => mb.cmp(&ma),
                         Sort::Io => {
-                            let (ia, ib) = (io_sum(&a.2), io_sum(&b.2));
+                            let (ia, ib) = (io_sum(&a.3), io_sum(&b.3));
                             (ib.0 + ib.1).total_cmp(&(ia.0 + ia.1))
                         }
-                        Sort::Pid => a.2[0].pid.cmp(&b.2[0].pid),
+                        Sort::Pid => a.3[0].pid.cmp(&b.3[0].pid),
                         Sort::Name => a.1.to_lowercase().cmp(&b.1.to_lowercase()),
                     }
                 });
-                for (key, label, members) in groups {
+                for (key, label, kind, members) in groups {
                     let (cpu, rss) = sum(&members);
                     let io = io_sum(&members);
                     let collapsed = self.collapsed.contains(&key);
@@ -287,7 +307,7 @@ impl App {
                         rows.push(Row::Proc { info: members[0].clone(), prefix: String::new() });
                         continue;
                     }
-                    rows.push(Row::Group { key, label, count: members.len(), cpu, rss, io, collapsed });
+                    rows.push(Row::Group { key, label, kind, count: members.len(), cpu, rss, io, collapsed });
                     if !collapsed {
                         let n = members.len();
                         for (i, p) in members.into_iter().enumerate() {
@@ -530,8 +550,9 @@ impl App {
             }
             KeyCode::Char('1') => self.switch_view(View::List),
             KeyCode::Char('2') => self.switch_view(View::App),
-            KeyCode::Char('3') => self.switch_view(View::Parent),
-            KeyCode::Char('4') => self.switch_view(View::Tree),
+            KeyCode::Char('3') => self.switch_view(View::Service),
+            KeyCode::Char('4') => self.switch_view(View::Parent),
+            KeyCode::Char('5') => self.switch_view(View::Tree),
             KeyCode::Char('s') => {
                 self.sort = self.sort.next();
                 self.rebuild();
@@ -606,12 +627,12 @@ mod tests {
             start_ticks: 0,
             kthread: false,
             io: None,
+            service: piddle_core::service::Service::unknown(),
         }
     }
 
-    fn app_with(procs: Vec<ProcInfo>) -> App {
-        let mut app = App::new(Control::new(1000));
-        app.apply(Snapshot {
+    fn snap(procs: Vec<ProcInfo>) -> Snapshot {
+        Snapshot {
             procs,
             ncpu: 4,
             clk_tck: 100,
@@ -621,7 +642,12 @@ mod tests {
             mem_used: 0,
             sample_cost: Duration::ZERO,
             self_pid: 99_999,
-        });
+        }
+    }
+
+    fn app_with(procs: Vec<ProcInfo>) -> App {
+        let mut app = App::new(Control::new(1000));
+        app.apply(snap(procs));
         app
     }
 
@@ -647,6 +673,34 @@ mod tests {
 
     fn key(c: KeyCode) -> KeyEvent {
         KeyEvent::new(c, KeyModifiers::NONE)
+    }
+
+    fn in_service(mut p: ProcInfo, path: &str) -> ProcInfo {
+        p.service = Arc::new(piddle_core::service::classify(path, &HashMap::new(), 1000));
+        p
+    }
+
+    #[test]
+    fn service_view_groups_and_follows_moves() {
+        let user = "/user.slice/user-1000.slice/user@1000.service";
+        let procs = |vim_cgroup: &str| {
+            vec![
+                in_service(proc(10, 1, "sshd", 1.0), "/system.slice/ssh.service"),
+                in_service(proc(11, 10, "bash", 0.0), "/user.slice/user-1000.slice/session-3.scope"),
+                in_service(proc(12, 11, "vim", 50.0), vim_cgroup),
+            ]
+        };
+        let mut app = app_with(procs("/user.slice/user-1000.slice/session-3.scope"));
+        app.on_key(key(KeyCode::Char('3')));
+        assert_eq!(app.view, View::Service);
+        assert_eq!(names(&app), ["[session-3 ×2]", "├─ vim", "└─ bash", "[ssh ×1]", "└─ sshd"]);
+        // The same process (pid + start time) moved into another unit: it follows.
+        app.apply(snap(procs(&format!("{user}/app.slice/run-u42.scope"))));
+        assert_eq!(names(&app), ["[run-u42 ×1]", "└─ vim", "[ssh ×1]", "└─ sshd", "[session-3 ×1]", "└─ bash"]);
+        // Search matches the service name too.
+        app.query = "ssh".into();
+        app.rebuild();
+        assert_eq!(names(&app), ["[ssh ×1]", "└─ sshd"]);
     }
 
     #[test]

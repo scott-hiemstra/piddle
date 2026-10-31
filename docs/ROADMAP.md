@@ -12,7 +12,7 @@ CPU load, and related things are grouped.
 
 ## Order
 
-1. **Service/cgroup grouping in PIDdle.** Add a "By service" view that groups
+1. **Service/cgroup grouping in PIDdle.** *(done on `main`, for 0.4.0)* Add a "By service" view that groups
    processes by systemd unit, slice or container, read from
    `/proc/<pid>/cgroup`. It's small, and it lays groundwork for later items:
    - containers are cgroups, so a Docker/Podman view mostly falls out of it;

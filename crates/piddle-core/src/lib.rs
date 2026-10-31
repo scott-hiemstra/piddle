@@ -9,6 +9,7 @@
 //! * [`encode`] — CPU → color and memory → size mappings plus formatting.
 //! * [`actions`] — signalling processes safely, state descriptions.
 //! * [`net`] — a process's network connections, looked up on demand.
+//! * [`service`] — which systemd service, scope or container a process is in.
 //! * [`GUI_UNAVAILABLE`] — exit code contract between `piddle-gui` and the
 //!   `piddle` launcher.
 
@@ -16,6 +17,7 @@ pub mod actions;
 pub mod encode;
 pub mod net;
 pub mod sampler;
+pub mod service;
 
 /// Exit code `piddle-gui` uses when it cannot open a display. The `piddle`
 /// launcher then falls back to the terminal UI.

@@ -244,6 +244,7 @@ mod tests {
             start_ticks: 0,
             kthread: false,
             io: None,
+            service: crate::service::Service::unknown(),
         }
     }
 

@@ -40,15 +40,16 @@ Hover a bubble for CPU, memory and thread count. Click it to open the details wi
 
 - Real data sampled from `/proc` every 250 ms, 500 ms, 1 s or 2 s (configurable), with a pause button.
 - Smooth animation: sizes, colors, fade-in and fade-out ease between samples. A damped, position-based simulation keeps existing bubbles where they are and only nudges neighbours.
-- Four layouts:
+- Five layouts:
   - **Free**: one packed cloud.
   - **By application**: processes clustered by executable, for example all `chrome` processes. Each cluster shows its count, total CPU and total memory.
+  - **By service**: processes clustered by the systemd service, scope or container they run in, read from `/proc/<pid>/cgroup`. Hull colors mark the kind: system services, user services (your `systemd --user` units), scopes (login sessions and launched apps), and containers (Docker, Podman, Kubernetes, LXC, systemd-nspawn, libvirt machines). Anything else falls back to its cgroup name. Membership is re-read every few samples, so a process moved to another cgroup changes cluster.
   - **By parent**: processes clustered by parent PID.
   - **Process tree**: a radial tree with the root in the center and one ring per generation. Parent→child links are drawn, and siblings are ordered by PID so the tree doesn't reshuffle. Every parent process gets a tag with its name, PID and child count, even when its bubble is tiny.
-- Search by name, command line or PID prefix. Matches are ringed and everything else is dimmed, so the layout doesn't jump around.
+- Search by name, command line, service or PID prefix. Matches are ringed and everything else is dimmed, so the layout doesn't jump around.
 - Filters: show or hide kernel threads (hidden by default), and **Active only**, which shows processes that used CPU in the last few seconds.
 - Screenshots: the camera button or **Ctrl+S** saves the canvas and sidebar as a full-resolution PNG in `~/Pictures` and copies it to the clipboard. With Ctrl+S, the hover card for the process under the mouse is included.
-- Details window with a live 60-second CPU history, CPU / memory / thread / disk I/O cards, parent, user, start time, priority, executable, command line, and the process's network connections (TCP and UDP with addresses and state, plus a Unix socket count).
+- Details window with a live 60-second CPU history, CPU / memory / thread / disk I/O cards, parent, user, service and cgroup, start time, priority, executable, command line, and the process's network connections (TCP and UDP with addresses and state, plus a Unix socket count).
 - Sidebar with a color and size legend. The size references are drawn at the current zoom, so they match the bubbles on screen. Below the legend are system totals, a top-CPU list (click an entry to open its details), and PIDdle's own CPU use and per-sample cost.
 - A dark interface that stays dark and readable even when the desktop forces a light GTK color scheme, as KDE's Breeze does. PIDdle also hides the harmless `Unknown key gtk-modules` warning that KDE's GTK4 settings cause.
 
@@ -72,9 +73,9 @@ A live process list with system CPU and memory meters. Each row shows:
 - disk reads and writes per second;
 - threads and state.
 
-- The same four views: list, by application, by parent, and process tree. Groups and tree branches can be collapsed.
+- The same views: list, by application, by service, by parent, and process tree. Groups and tree branches can be collapsed.
 - Search, sorting (CPU, memory, disk I/O, PID, name), active-only and kernel-thread filters, and an adjustable sampling interval.
-- A details popup with CPU history, disk I/O totals, and the process's network connections.
+- A details popup with service and cgroup, CPU history, disk I/O totals, and the process's network connections.
 - Terminate and Force Kill with the same safety rules as the GUI.
 - Uses 24-bit color when the terminal advertises it (`COLORTERM=truecolor`), otherwise the nearest 256-color shades.
 
@@ -83,8 +84,8 @@ A live process list with system CPU and memory meters. Each row shows:
 | ↑ ↓ PgUp PgDn Home End | Move |
 | Enter | Details (or collapse a group) |
 | Space | Collapse / expand a group or tree branch |
-| `/` | Search name, command or PID (Esc clears) |
-| `v` or `1`–`4` | View: list, by application, by parent, tree |
+| `/` | Search name, command, service or PID (Esc clears) |
+| `v` or `1`–`5` | View: list, by application, by service, by parent, tree |
 | `s` | Sort: CPU, memory, disk I/O, PID, name |
 | `i` | Show / hide the disk I/O columns |
 | `a` / `K` | Active only / show kernel threads |
@@ -120,7 +121,7 @@ You can only signal other users' processes when PIDdle runs with the right privi
 
 ## Low overhead
 
-- Each sample does one small read of `/proc/<pid>/stat` per process. Command line, owner and application name are read once per process and cached by (PID, start time), so a reused PID is detected.
+- Each sample does one small read of `/proc/<pid>/stat` per process. Command line, owner and application name are read once per process and cached by (PID, start time), so a reused PID is detected. Service membership can change while a process runs, so `/proc/<pid>/cgroup` is re-read on a rotation: a quarter of the processes per sample, each one every fourth sample.
 - Sampling runs on a background thread. Only the latest snapshot is kept, so the UI never processes a backlog.
 - GUI: the canvas draws through GtkSnapshot/GSK render nodes, so the GPU does gradients, clipping, strokes and text rendering. The frame clock stops as soon as nothing visible is changing. While only colors are easing, the canvas redraws at about 20 fps.
 - TUI: redraws only when a key is pressed or new data arrives. It uses about 1% of one core at the default 1-second interval, including per-process disk I/O.
@@ -198,6 +199,7 @@ crates/
     encode.rs       CPU → color, memory → radius, formatting helpers
     actions.rs      risk assessment (assess), signalling via pidfd (PID-reuse guard), state names
     net.rs          a process's network connections, from /proc/<pid>/fd and /proc/<pid>/net
+    service.rs      systemd service / scope / container of a process, from /proc/<pid>/cgroup
     examples/top.rs minimal plain-text example
   piddle-gui/       GTK 4 interface (binary `piddle-gui`)
     view.rs         bubble model, layouts, physics, GSK rendering

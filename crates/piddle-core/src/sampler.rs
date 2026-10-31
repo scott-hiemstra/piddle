@@ -4,6 +4,10 @@
 //! Anything that does not change over a process's lifetime (command line,
 //! owner, application name) is read once per process and cached, keyed by
 //! (pid, start time) so PID reuse is detected.
+//!
+//! Service membership (`/proc/<pid>/cgroup`) can change while a process
+//! runs, so it is re-read on a rotation: each process every
+//! [`CGROUP_EVERY`] samples, a quarter of the processes per tick.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -14,9 +18,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::encode::sanitize;
+use crate::service::{self, Service};
 
 /// Kernel thread flag from `include/linux/sched.h`.
 const PF_KTHREAD: u64 = 0x0020_0000;
+
+/// Re-read each process's cgroup every this many samples.
+pub const CGROUP_EVERY: u64 = 4;
 
 #[derive(Clone, Debug)]
 pub struct ProcInfo {
@@ -44,6 +52,9 @@ pub struct ProcInfo {
     /// Disk I/O, when collection is enabled and `/proc/<pid>/io` is readable
     /// (own processes, or all of them when running as root).
     pub io: Option<IoStats>,
+    /// The systemd service, scope or container the process is in. Shared
+    /// between all members, and may change between samples.
+    pub service: Arc<Service>,
 }
 
 /// Storage I/O of one process: bytes actually read from / written to block
@@ -102,6 +113,9 @@ struct Cached {
     prev_io: Option<(u64, u64)>,
     /// `/proc/<pid>/io` was not readable; permissions don't change, so skip it.
     io_denied: bool,
+    /// Raw cgroup path last read, to reclassify only when it changes.
+    cgroup: Box<str>,
+    service: Arc<Service>,
 }
 
 /// Synchronous sampler: call [`Sampler::sample`] at a steady cadence.
@@ -111,6 +125,13 @@ pub struct Sampler {
     users: HashMap<u32, Arc<str>>,
     buf: String,
     io_buf: String,
+    cg_buf: String,
+    /// Interned classifications, keyed by raw cgroup path.
+    services: HashMap<Box<str>, Arc<Service>>,
+    kernel: Arc<Service>,
+    unknown: Arc<Service>,
+    tick: u64,
+    uid: u32,
     collect_io: bool,
     clk_tck: u64,
     page_size: u64,
@@ -166,6 +187,13 @@ impl Sampler {
             users: load_users(),
             buf: String::with_capacity(1024),
             io_buf: String::with_capacity(512),
+            cg_buf: String::with_capacity(256),
+            services: HashMap::new(),
+            kernel: Service::kernel(),
+            unknown: Service::unknown(),
+            tick: 0,
+            // SAFETY: getuid cannot fail.
+            uid: unsafe { libc::getuid() },
             collect_io: false,
             clk_tck,
             page_size,
@@ -204,6 +232,10 @@ impl Sampler {
             }
         }
         self.cache.retain(|_, c| c.seen);
+        self.tick += 1;
+        if self.tick.is_multiple_of(64) {
+            self.services.retain(|_, s| Arc::strong_count(s) > 1);
+        }
 
         let total_cpu = self.read_total_cpu();
         let (mem_total, mem_used) = read_meminfo(&mut self.buf);
@@ -237,6 +269,26 @@ impl Sampler {
             }
         };
         let fresh = !cached.seen && cached.prev_ticks == u64::MAX;
+        let kthread = st.flags & PF_KTHREAD != 0;
+        if kthread {
+            cached.service = self.kernel.clone();
+        } else if fresh || (pid as u64).wrapping_add(self.tick).is_multiple_of(CGROUP_EVERY) {
+            self.cg_buf.clear();
+            let ok = File::open(format!("/proc/{pid}/cgroup")).and_then(|mut f| f.read_to_string(&mut self.cg_buf));
+            if let Some(path) = ok.ok().and_then(|_| service::cgroup_path(&self.cg_buf))
+                && *cached.cgroup != *path
+            {
+                cached.service = match self.services.get(path) {
+                    Some(s) => s.clone(),
+                    None => {
+                        let s = Arc::new(service::classify(path, &self.users, self.uid));
+                        self.services.insert(path.into(), s.clone());
+                        s
+                    }
+                };
+                cached.cgroup = path.into();
+            }
+        }
         let cpu = if first || fresh || dt <= 0.0 {
             0.0
         } else {
@@ -282,8 +334,9 @@ impl Sampler {
             threads: st.threads,
             nice: st.nice,
             start_ticks: st.start_ticks,
-            kthread: st.flags & PF_KTHREAD != 0,
+            kthread,
             io,
+            service: cached.service.clone(),
         })
     }
 
@@ -321,6 +374,8 @@ impl Sampler {
             seen: false,
             prev_io: None,
             io_denied: false,
+            cgroup: "".into(),
+            service: self.unknown.clone(),
         }
     }
 

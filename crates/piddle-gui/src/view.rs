@@ -15,6 +15,7 @@ use gtk::{gdk, graphene, gsk, pango};
 
 use piddle_core::encode::{Rgb, cpu_color, fmt_bytes, fmt_cpu, mem_radius};
 use piddle_core::sampler::{ProcInfo, Snapshot};
+use piddle_core::service::ServiceKind;
 
 /// How urgently the scene needs redrawing after a simulation step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -31,8 +32,27 @@ pub enum Motion {
 pub enum Layout {
     Free,
     App,
+    Service,
     Parent,
     Tree,
+}
+
+impl Layout {
+    /// Layouts that pull bubbles into clusters with a shared hull.
+    fn grouped(self) -> bool {
+        matches!(self, Layout::App | Layout::Service | Layout::Parent)
+    }
+}
+
+/// Hull tint per service kind, chosen away from the CPU color scale.
+fn kind_tint(kind: Option<ServiceKind>) -> (f64, f64, f64) {
+    match kind {
+        Some(ServiceKind::User) => (0.45, 0.85, 0.55),
+        Some(ServiceKind::Scope) => (0.75, 0.58, 0.98),
+        Some(ServiceKind::Container) => (0.95, 0.5, 0.8),
+        Some(ServiceKind::Kernel | ServiceKind::Other) => (0.6, 0.62, 0.66),
+        Some(ServiceKind::System) | None => (0.6, 0.7, 0.9),
+    }
 }
 
 /// A process counts as "active" if it used at least this much CPU recently.
@@ -72,6 +92,7 @@ struct LabelCache {
 struct Group {
     key: Arc<str>,
     label: String,
+    kind: Option<ServiceKind>,
     x: f64,
     y: f64,
     vx: f64,
@@ -300,9 +321,13 @@ impl View {
         }
     }
 
-    fn group_key(&self, b: &Bubble) -> (Arc<str>, String) {
+    fn group_key(&self, b: &Bubble) -> (Arc<str>, String, Option<ServiceKind>) {
         match self.layout {
-            Layout::App => (b.info.app.clone(), b.info.app.to_string()),
+            Layout::App => (b.info.app.clone(), b.info.app.to_string(), None),
+            Layout::Service => {
+                let s = &b.info.service;
+                (s.key.clone(), s.label.to_string(), Some(s.kind))
+            }
             Layout::Parent => {
                 let pp = b.info.ppid;
                 let label = match self.names.get(&pp) {
@@ -310,9 +335,9 @@ impl View {
                     None if pp == 0 => "kernel".to_string(),
                     None => format!("PID {pp}"),
                 };
-                (Arc::from(pp.to_string()), label)
+                (Arc::from(pp.to_string()), label, None)
             }
-            Layout::Free | Layout::Tree => (Arc::from(""), String::new()),
+            Layout::Free | Layout::Tree => (Arc::from(""), String::new(), None),
         }
     }
 
@@ -323,11 +348,12 @@ impl View {
         let mut groups: Vec<Group> = Vec::new();
         let mut fresh_groups = Vec::new();
         for i in 0..self.bubbles.len() {
-            let (key, label) = self.group_key(&self.bubbles[i]);
+            let (key, label, kind) = self.group_key(&self.bubbles[i]);
             let gi = *map.entry(key.clone()).or_insert_with(|| {
                 let g = match old.remove(&key) {
                     Some(mut g) => {
                         g.label = label;
+                        g.kind = kind;
                         g
                     }
                     None => {
@@ -335,6 +361,7 @@ impl View {
                         Group {
                             key,
                             label,
+                            kind,
                             x: 0.0,
                             y: 0.0,
                             vx: 0.0,
@@ -407,7 +434,7 @@ impl View {
         let b = &self.bubbles[i];
         let (ax, ay) = match (self.layout, b.parent) {
             (Layout::Tree | Layout::Parent, Some(p)) => (self.bubbles[p].x, self.bubbles[p].y),
-            (Layout::App | Layout::Parent, _) => (self.groups[b.group].x, self.groups[b.group].y),
+            (l, _) if l.grouped() => (self.groups[b.group].x, self.groups[b.group].y),
             (_, Some(p)) => (self.bubbles[p].x, self.bubbles[p].y),
             _ => (0.0, 0.0),
         };
@@ -451,7 +478,8 @@ impl View {
         for b in &mut self.bubbles {
             b.matched = !q.is_empty()
                 && ((numeric && b.info.pid.to_string().starts_with(q.as_str()))
-                    || b.info.search_text.contains(q.as_str()));
+                    || b.info.search_text.contains(q.as_str())
+                    || b.info.service.search.contains(q.as_str()));
             if b.matched && !b.dying {
                 n += 1;
             }
@@ -551,7 +579,7 @@ impl View {
                     acc[i] = (-b.x * g / sa, -b.y * g * sa);
                 }
             }
-            Layout::App | Layout::Parent => {
+            Layout::App | Layout::Service | Layout::Parent => {
                 self.group_physics(sa);
                 for (i, b) in self.bubbles.iter().enumerate() {
                     let g = &self.groups[b.group];
@@ -762,7 +790,7 @@ impl View {
     /// Sort-and-sweep collision resolution (position based, no added velocity).
     fn collide(&mut self) -> f64 {
         let mut max_push = 0.0f64;
-        let grouped = matches!(self.layout, Layout::App | Layout::Parent);
+        let grouped = self.layout.grouped();
         let max_pad = 3.0;
         let mut order = std::mem::take(&mut self.order);
         order.clear();
@@ -903,20 +931,28 @@ impl View {
         let dimming = self.has_query();
 
         // Group hulls.
-        if matches!(self.layout, Layout::App | Layout::Parent) {
-            let pb = gsk::PathBuilder::new();
-            let mut any = false;
+        if self.layout.grouped() {
+            // One batched path per tint (service kinds differ; other layouts use one).
+            let mut paths: Vec<(Option<ServiceKind>, gsk::PathBuilder)> = Vec::new();
             for g in self.groups.iter().filter(|g| g.members >= 2) {
                 let (gx, gy) = self.to_screen(g.cx, g.cy);
+                let pb = match paths.iter().position(|(k, _)| *k == g.kind) {
+                    Some(i) => &paths[i].1,
+                    None => {
+                        paths.push((g.kind, gsk::PathBuilder::new()));
+                        &paths.last().unwrap().1
+                    }
+                };
                 pb.add_circle(&point(gx, gy), (g.hull * s) as f32);
-                any = true;
             }
-            if any {
+            let alpha = if self.layout == Layout::Service { 0.32 } else { 0.18 };
+            for (kind, pb) in paths {
                 let path = pb.to_path();
-                snap.append_fill(&path, gsk::FillRule::Winding, &rgba(1.0, 1.0, 1.0, 0.03));
+                let (r, g, b) = kind_tint(kind);
+                snap.append_fill(&path, gsk::FillRule::Winding, &rgba(r, g, b, 0.03));
                 let stroke = gsk::Stroke::new(1.0);
                 stroke.set_dash(&[4.0, 4.0]);
-                snap.append_stroke(&path, &stroke, &rgba(0.6, 0.7, 0.9, 0.18));
+                snap.append_stroke(&path, &stroke, &rgba(r, g, b, alpha));
             }
         }
 
@@ -1010,7 +1046,7 @@ impl View {
             }
         }
 
-        if matches!(self.layout, Layout::App | Layout::Parent) {
+        if self.layout.grouped() {
             self.draw_group_labels(snap, pctx);
         }
         if self.layout == Layout::Tree {
@@ -1063,8 +1099,9 @@ impl View {
             if gr < 30.0 {
                 continue;
             }
+            let kind = g.kind.map(|k| format!("{} · ", k.label())).unwrap_or_default();
             let markup = format!(
-                "<b>{}</b>  <span alpha='65%'>×{} · {} · {}</span>",
+                "<b>{}</b>  <span alpha='65%'>{kind}×{} · {} · {}</span>",
                 glib_escape(&g.label),
                 g.members,
                 fmt_cpu(g.cpu),
@@ -1079,16 +1116,10 @@ impl View {
             let (lw, lh) = (lw as f64, lh as f64);
             let x = gx - lw / 2.0;
             let y = (gy - gr - lh / 2.0).max(4.0);
-            card(
-                snap,
-                x - 8.0,
-                y - 3.0,
-                lw + 16.0,
-                lh + 6.0,
-                (lh + 6.0) / 2.0,
-                rgba(0.09, 0.105, 0.14, 0.92),
-                rgba(0.6, 0.7, 0.9, 0.25),
-            );
+            card(snap, x - 8.0, y - 3.0, lw + 16.0, lh + 6.0, (lh + 6.0) / 2.0, rgba(0.09, 0.105, 0.14, 0.92), {
+                let (r, gr, b) = kind_tint(g.kind);
+                rgba(r, gr, b, if g.kind.is_some() { 0.5 } else { 0.25 })
+            });
             text(snap, &l, x, y, rgba(0.86, 0.89, 0.95, 0.95));
         }
     }
@@ -1099,7 +1130,7 @@ impl View {
         let mem_pct = if self.meta.mem_total > 0 { p.rss as f64 / self.meta.mem_total as f64 * 100.0 } else { 0.0 };
         let markup = format!(
             "<span size='large' weight='bold'>{}</span>\n\
-             <span alpha='65%'>PID {} · {}</span>\n\n\
+             <span alpha='65%'>PID {} · {}\n{} · {}</span>\n\n\
              CPU\t\t<b>{}</b> <span alpha='60%'>of one core</span>\n\
              Memory\t<b>{}</b> <span alpha='60%'>({:.1}% RAM)</span>\n\
              Threads\t<b>{}</b>\n\n\
@@ -1107,6 +1138,8 @@ impl View {
             glib_escape(&p.name),
             p.pid,
             glib_escape(&p.user),
+            p.service.kind.label(),
+            glib_escape(&p.service.label),
             fmt_cpu(b.cpu),
             fmt_bytes(p.rss),
             mem_pct,

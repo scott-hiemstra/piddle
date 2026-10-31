@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=PIDdle
+Comment=Visual process viewer: bubbles sized by memory, colored by CPU load
+Exec=piddle
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;GTK;
+Keywords=process;task;monitor;cpu;memory;kill;

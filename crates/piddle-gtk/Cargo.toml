@@ -1,0 +1,17 @@
+[package]
+name = "piddle-gtk"
+description = "PIDdle: a visual process viewer for Linux (GTK4 front end)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "piddle"
+path = "src/main.rs"
+
+[dependencies]
+piddle-core = { path = "../piddle-core" }
+gtk = { version = "0.9", package = "gtk4", features = ["v4_14"] }
+pangocairo = "0.20"
+cairo-rs = { version = "0.20", features = ["png"] }

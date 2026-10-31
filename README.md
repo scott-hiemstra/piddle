@@ -136,9 +136,9 @@ On a server, install `piddle`. On a desktop, install both. Packages are built fo
 
 | Distribution | Build | Install |
 |---|---|---|
-| Debian, Ubuntu | `packaging/build-deb.sh` | `sudo apt install ./target/debian/piddle_0.3.0_amd64.deb ./target/debian/piddle-gui_0.3.0_amd64.deb` |
-| Fedora, RHEL, openSUSE | `packaging/build-rpm.sh` | `sudo dnf install ./target/rpm/piddle-0.3.0-1.x86_64.rpm ./target/rpm/piddle-gui-0.3.0-1.x86_64.rpm` |
-| Arch Linux | `packaging/build-arch.sh` | `sudo pacman -U target/arch/piddle-0.3.0-1-x86_64.pkg.tar.zst target/arch/piddle-gui-0.3.0-1-x86_64.pkg.tar.zst` |
+| Debian, Ubuntu | `packaging/build-deb.sh` | `sudo apt install ./target/debian/piddle_0.3.1_amd64.deb ./target/debian/piddle-gui_0.3.1_amd64.deb` |
+| Fedora, RHEL, openSUSE | `packaging/build-rpm.sh` | `sudo dnf install ./target/rpm/piddle-0.3.1-1.x86_64.rpm ./target/rpm/piddle-gui-0.3.1-1.x86_64.rpm` |
+| Arch Linux | `packaging/build-arch.sh` | `sudo pacman -U target/arch/piddle-0.3.1-1-x86_64.pkg.tar.zst target/arch/piddle-gui-0.3.1-1-x86_64.pkg.tar.zst` |
 
 Remove with `apt remove`, `dnf remove` or `pacman -R` and the package names.
 
@@ -158,7 +158,7 @@ Remove with `apt remove`, `dnf remove` or `pacman -R` and the package names.
 Pushing a version tag builds all packages on GitHub Actions and attaches them to a GitHub release:
 
 ```sh
-git tag v0.3.0 && git push origin v0.3.0     # tag must match the version in Cargo.toml
+git tag v0.3.1 && git push origin v0.3.1     # tag must match the version in Cargo.toml
 ```
 
 The `.deb` and `.rpm` are built on Ubuntu 24.04, natively on GitHub's x86_64 and ARM64 runners. The Arch packages are made from the same binaries in an Arch Linux container. You can also run the **Release** workflow by hand from the Actions tab; it then only builds the packages as downloadable artifacts and publishes nothing.

@@ -11,6 +11,8 @@ In the graphical interface, each running process is a bubble:
 
 The terminal interface uses the same CPU colors in a live, sortable process list.
 
+![PIDdle graphical interface: processes as bubbles, with the color and size legend and system stats in the sidebar](docs/screenshots/gui-main.png)
+
 ## Usage
 
 ```sh
@@ -29,6 +31,10 @@ piddle --gui    # graphical interface
 You can also run `piddle-gui` or `piddle-tui` directly. The app-menu entry starts `piddle-gui`.
 
 ## Graphical interface
+
+| Process tree | By application |
+|---|---|
+| ![Radial process tree with parent tags and a hover card](docs/screenshots/gui-tree.png) | ![Processes clustered by application, with totals per cluster](docs/screenshots/gui-apps.png) |
 
 Hover a bubble for CPU, memory and thread count. Click it to open the details window, which has the **Terminate** (SIGTERM) and **Force Kill** (SIGKILL) actions. Both are protected against mistakes (see [Safety](#safety-when-stopping-processes)).
 
@@ -53,6 +59,12 @@ Hover a bubble for CPU, memory and thread count. Click it to open the details wi
 | Esc | Clear the search |
 
 ## Terminal interface
+
+![PIDdle terminal interface: process list with CPU-colored bars and memory bars](docs/screenshots/tui-list.png)
+
+| Tree view | Search and details |
+|---|---|
+| ![Terminal tree view](docs/screenshots/tui-tree.png) | ![Search results with the details popup and CPU history](docs/screenshots/tui-details.png) |
 
 A live process list with system CPU and memory meters. Each row shows CPU (colored with the GUI's scale, with a bar where full means one core), memory with a relative bar, threads and state.
 
@@ -167,6 +179,7 @@ crates/
     main.rs         arguments and event loop
 .github/workflows/  ci.yml (fmt, clippy, test, build), release.yml (packages + GitHub release)
 data/               desktop entry
+docs/screenshots/   README images
 packaging/          build-deb.sh, build-rpm.sh, build-arch.sh (+ common.sh)
 ```
 

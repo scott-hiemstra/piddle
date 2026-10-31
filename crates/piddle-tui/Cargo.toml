@@ -1,0 +1,15 @@
+[package]
+name = "piddle-tui"
+description = "PIDdle: a visual process viewer for Linux (terminal front end)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "piddle-tui"
+path = "src/main.rs"
+
+[dependencies]
+piddle-core = { path = "../piddle-core" }
+ratatui = "0.30.2"

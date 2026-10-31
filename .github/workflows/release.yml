@@ -1,7 +1,7 @@
 name: Release
 
-# Push a tag like v0.1.0 to build the .deb, .rpm and Arch packages and publish
-# them as a GitHub release. Run it manually to build the packages as workflow
+# Push a tag like v0.2.0 to build the piddle and piddle-gui packages (.deb,
+# .rpm, Arch) and publish them as a GitHub release. Run it manually to build the packages as workflow
 # artifacts without publishing anything.
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Binary, .deb and .rpm
+    name: Binaries, .deb and .rpm
     # Ubuntu 24.04 ships GTK 4.14, the minimum PIDdle supports.
     runs-on: ubuntu-24.04
     steps:
@@ -34,6 +34,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends libgtk-4-dev dpkg-dev fakeroot rpm
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
 
       - uses: Swatinem/rust-cache@v2
 
@@ -48,8 +50,11 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: piddle-binary
-          path: target/release/piddle
+          name: piddle-binaries
+          path: |
+            target/release/piddle-gui
+            target/x86_64-unknown-linux-musl/release/piddle
+            target/x86_64-unknown-linux-musl/release/piddle-tui
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
@@ -64,7 +69,7 @@ jobs:
     name: Arch package
     needs: build
     runs-on: ubuntu-24.04
-    # Ubuntu has no makepkg, so package the same binary inside Arch Linux.
+    # Ubuntu has no makepkg, so package the same binaries inside Arch Linux.
     container: archlinux:latest
     steps:
       - name: Install makepkg
@@ -74,13 +79,13 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: piddle-binary
-          path: target/release
+          name: piddle-binaries
+          path: target
 
-      - name: Build Arch package
+      - name: Build Arch packages
         # makepkg refuses to run as root.
         run: |
-          chmod +x target/release/piddle
+          chmod +x target/release/piddle-gui target/x86_64-unknown-linux-musl/release/piddle*
           useradd -m builder
           chown -R builder .
           su builder -c 'PIDDLE_SKIP_BUILD=1 packaging/build-arch.sh'

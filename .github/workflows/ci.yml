@@ -28,6 +28,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: x86_64-unknown-linux-musl
 
       - uses: Swatinem/rust-cache@v2
 
@@ -42,3 +43,14 @@ jobs:
 
       - name: Release build
         run: cargo build --release --locked
+
+      - name: Static launcher and terminal UI (musl)
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl -p piddle -p piddle-tui
+
+      - name: Launcher and terminal UI link no GTK
+        run: |
+          for b in target/release/piddle target/release/piddle-tui; do
+            if ldd "$b" | grep -Eq 'gtk|cairo|pango|glib'; then
+              echo "::error::$b links GUI libraries"; ldd "$b"; exit 1
+            fi
+          done

@@ -1,28 +1,39 @@
 #!/usr/bin/env bash
-# Build an RPM: target/rpm/piddle-<version>-1.<arch>.rpm
+# Build RPMs: target/rpm/piddle-<version>-1.<arch>.rpm and
+# target/rpm/piddle-gui-<version>-1.<arch>.rpm
 cd "$(dirname "$0")/.."
 . packaging/common.sh
 
 top=$PWD/target/rpm/build
 rm -rf "$top"
-mkdir -p "$top"/{SPECS,BUILDROOT,RPMS}
+mkdir -p "$top"/{SPECS,RPMS}
 stage=$top/stage
-stage_files "$stage"
+stage_files "$stage" "${CORE_FILES[@]}" "${GUI_FILES[@]}"
+install -Dm644 LICENSE "$stage/usr/share/licenses/piddle/LICENSE"
 
-cat > "$top/SPECS/piddle.spec" <<SPEC
+cat >"$top/SPECS/piddle.spec" <<SPEC
 %global debug_package %{nil}
 %global _build_id_links none
 
 Name:           piddle
 Version:        $VERSION
 Release:        1
-Summary:        $SUMMARY
+Summary:        $SUMMARY_CORE
 License:        MIT
 URL:            $HOMEPAGE
 Packager:       $MAINTAINER
 
 %description
-$DESCRIPTION
+$DESC_CORE
+
+%package gui
+Summary:        $SUMMARY_GUI
+Requires:       piddle = %{version}-%{release}
+# 0.1.0's piddle package was the GUI; keep it installed across the upgrade.
+Obsoletes:      piddle < 0.2.0
+
+%description gui
+$DESC_GUI
 
 Requires GTK 4.14 or newer.
 
@@ -31,13 +42,19 @@ cp -a $stage/. %{buildroot}/
 
 %files
 /usr/bin/piddle
-/usr/share/applications/io.github.piddle.desktop
+/usr/bin/piddle-tui
 %doc /usr/share/doc/piddle/README.md
+%license /usr/share/licenses/piddle/LICENSE
+
+%files gui
+/usr/bin/piddle-gui
+/usr/share/applications/io.github.piddle.desktop
 %license /usr/share/licenses/piddle/LICENSE
 SPEC
 
-# Library requirements (libgtk-4.so.1 etc.) are generated from the binary.
+# Library requirements (libgtk-4.so.1 etc.) are generated from each binary.
 rpmbuild --quiet -bb --define "_topdir $top" --define "_dbpath $top/rpmdb" "$top/SPECS/piddle.spec"
-out=$(find "$top/RPMS" -name '*.rpm' | head -1)
-mv "$out" target/rpm/
-echo "target/rpm/$(basename "$out")"
+for f in $(find "$top/RPMS" -name '*.rpm'); do
+  mv "$f" target/rpm/
+  echo "target/rpm/$(basename "$f")"
+done

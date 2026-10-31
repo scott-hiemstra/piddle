@@ -169,7 +169,7 @@ searchentry { min-width: 260px; }
 
 fn main() -> glib::ExitCode {
     silence_foreign_config_warning();
-    // Headless render for testing/docs: piddle --snapshot out.png [free|app|parent|tree] [query]
+    // Headless render for testing/docs: piddle-gui --snapshot out.png [free|app|parent|tree] [query]
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--snapshot") {
         let path = args.get(2).map(String::as_str).unwrap_or("piddle.png");
@@ -181,6 +181,10 @@ fn main() -> glib::ExitCode {
         };
         snapshot(path, layout, args.get(4).map(String::as_str).unwrap_or(""));
         return glib::ExitCode::SUCCESS;
+    }
+    if let Err(e) = gtk::init() {
+        eprintln!("piddle-gui: cannot start the graphical interface: {e}");
+        std::process::exit(piddle_core::GUI_UNAVAILABLE);
     }
     let app = gtk::Application::builder().application_id(APP_ID).build();
     app.connect_startup(|_| {

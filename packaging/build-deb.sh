@@ -1,45 +1,63 @@
 #!/usr/bin/env bash
-# Build a Debian package: target/debian/piddle_<version>_<arch>.deb
-set -euo pipefail
+# Build Debian packages: target/debian/piddle_<version>_<arch>.deb and
+# target/debian/piddle-gui_<version>_<arch>.deb
 cd "$(dirname "$0")/.."
-[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+. packaging/common.sh
 
-cargo build --release -p piddle-gtk
-
-version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 arch=$(dpkg --print-architecture)
 out=target/debian
-root=$out/piddle_${version}_${arch}
-rm -rf "$root"
+mkdir -p "$out"
 
-install -Dm755 target/release/piddle "$root/usr/bin/piddle"
-install -Dm644 data/io.github.piddle.desktop "$root/usr/share/applications/io.github.piddle.desktop"
-install -Dm644 README.md "$root/usr/share/doc/piddle/README.md"
-install -Dm644 LICENSE "$root/usr/share/doc/piddle/copyright"
+# Shared-library dependencies of the given binaries, computed by dpkg-shlibdeps.
+shlibdeps() {
+  local work
+  work=$(mktemp -d)
+  mkdir -p "$work/debian"
+  printf 'Source: piddle\n\nPackage: piddle\nArchitecture: any\n' >"$work/debian/control"
+  (cd "$work" && dpkg-shlibdeps -O "$@" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+  rm -rf "$work"
+}
 
-# Shared-library dependencies, computed from the binary.
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/debian"
-printf 'Source: piddle\n\nPackage: piddle\nArchitecture: any\n' > "$work/debian/control"
-depends=$(cd "$work" && dpkg-shlibdeps -O "$OLDPWD/$root/usr/bin/piddle" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+# build_deb <package> <summary> <description> <extra depends> <extra fields> <file entries...>
+build_deb() {
+  local pkg=$1 summary=$2 desc=$3 extra_depends=$4 extra=$5
+  shift 5
+  local root="$out/${pkg}_${VERSION}_${arch}"
+  rm -rf "$root"
+  stage_files "$root" "$@"
+  install -Dm644 LICENSE "$root/usr/share/doc/$pkg/copyright"
 
-size=$(du -sk "$root" | cut -f1)
-mkdir -p "$root/DEBIAN"
-cat > "$root/DEBIAN/control" <<CTRL
-Package: piddle
-Version: $version
-Architecture: $arch
-Maintainer: Scott Hiemstra <scott@hiemstra.us>
-Installed-Size: $size
-Depends: $depends
-Section: utils
-Priority: optional
-Description: visual process viewer (GTK4)
- PIDdle shows running processes as bubbles sized by memory and colored by
- CPU load (100% = one full core). Group by application or parent, view the
- process tree, search, and terminate or kill processes with confirmation.
-CTRL
+  local bins=()
+  for f in "$root"/usr/bin/*; do bins+=("$PWD/$f"); done
+  # Static binaries have no library dependencies; join what remains.
+  local depends
+  depends=$(shlibdeps "${bins[@]}")
+  depends=$(printf '%s\n' "$depends" "$extra_depends" | sed '/^$/d' | paste -sd, - | sed 's/,/, /g')
 
-dpkg-deb --root-owner-group --build "$root" "$out/" >/dev/null
-echo "$out/piddle_${version}_${arch}.deb"
+  mkdir -p "$root/DEBIAN"
+  {
+    echo "Package: $pkg"
+    echo "Version: $VERSION"
+    echo "Architecture: $arch"
+    echo "Maintainer: $MAINTAINER"
+    echo "Installed-Size: $(du -sk "$root" | cut -f1)"
+    [ -n "$depends" ] && echo "Depends: $depends"
+    [ -n "$extra" ] && echo "$extra"
+    echo "Section: utils"
+    echo "Priority: optional"
+    echo "Homepage: $HOMEPAGE"
+    echo "Description: $summary"
+    sed 's/^/ /' <<<"$desc"
+  } >"$root/DEBIAN/control"
+
+  dpkg-deb --root-owner-group --build "$root" "$out/" >/dev/null
+  rm -rf "$root"
+  echo "$out/${pkg}_${VERSION}_${arch}.deb"
+}
+
+build_deb piddle "$SUMMARY_CORE" "$DESC_CORE" "" "" "${CORE_FILES[@]}"
+# 0.1.0's piddle package shipped the GUI and its desktop entry.
+build_deb piddle-gui "$SUMMARY_GUI" "$DESC_GUI" "piddle (= $VERSION)" \
+  "Replaces: piddle (<< 0.2.0)
+Breaks: piddle (<< 0.2.0)" \
+  "${GUI_FILES[@]}"

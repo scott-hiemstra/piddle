@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/piddle-core", "crates/piddle-gtk"]
+members = ["crates/piddle", "crates/piddle-core", "crates/piddle-gui", "crates/piddle-tui"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 authors = ["Scott Hiemstra <scott@hiemstra.us>"]

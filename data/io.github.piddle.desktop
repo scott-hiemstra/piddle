@@ -2,7 +2,7 @@
 Type=Application
 Name=PIDdle
 Comment=Visual process viewer: bubbles sized by memory, colored by CPU load
-Exec=piddle
+Exec=piddle-gui
 Icon=utilities-system-monitor
 Terminal=false
 Categories=System;Monitor;GTK;

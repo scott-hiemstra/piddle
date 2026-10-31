@@ -1,13 +1,13 @@
 [package]
-name = "piddle-gtk"
-description = "PIDdle: a visual process viewer for Linux (GTK4 front end)"
+name = "piddle-gui"
+description = "PIDdle: a visual process viewer for Linux (GTK4 graphical front end)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "piddle"
+name = "piddle-gui"
 path = "src/main.rs"
 
 [dependencies]

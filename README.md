@@ -2,16 +2,35 @@
 
 [![CI](https://github.com/scott-hiemstra/piddle/actions/workflows/ci.yml/badge.svg)](https://github.com/scott-hiemstra/piddle/actions/workflows/ci.yml)
 
-A visual process viewer for Linux, written in Rust with GTK4.
+A visual process viewer for Linux, written in Rust. It has a GTK 4 graphical interface for the desktop and a terminal interface for servers and SSH sessions.
 
-Each running process is a bubble:
+In the graphical interface, each running process is a bubble:
 
 - **Size is memory.** Bubble area grows with resident memory (RSS).
 - **Color is CPU load.** Colors run from cool blue through yellow to hot red. **100% means one fully used core**, so on an 8-core machine a single process can reach 800%. The color scale saturates at 100%.
 
-Hover a bubble for CPU, memory and thread count. Click it to open the details window, which has the **Terminate** (SIGTERM) and **Force Kill** (SIGKILL) actions. Both are protected against mistakes (see [Safety](#safety-when-stopping-processes)).
+The terminal interface uses the same CPU colors in a live, sortable process list.
 
-## Features
+## Usage
+
+```sh
+piddle          # graphical interface if a display is available, otherwise the terminal interface
+piddle --tui    # terminal interface (e.g. over SSH); options are passed on: piddle --tui --interval 500
+piddle --gui    # graphical interface
+```
+
+`piddle` is a small launcher that links no GUI libraries. It starts `piddle-gui` when a display is available, and switches to `piddle-tui` when:
+
+- there is no `WAYLAND_DISPLAY` or `DISPLAY`;
+- `piddle-gui` isn't installed;
+- GTK's libraries are missing;
+- or no display can be opened (for example a stale `DISPLAY` in an SSH session).
+
+You can also run `piddle-gui` or `piddle-tui` directly. The app-menu entry starts `piddle-gui`.
+
+## Graphical interface
+
+Hover a bubble for CPU, memory and thread count. Click it to open the details window, which has the **Terminate** (SIGTERM) and **Force Kill** (SIGKILL) actions. Both are protected against mistakes (see [Safety](#safety-when-stopping-processes)).
 
 - Real data sampled from `/proc` every 250 ms, 500 ms, 1 s or 2 s (configurable), with a pause button.
 - Smooth animation: sizes, colors, fade-in and fade-out ease between samples. A damped, position-based simulation keeps existing bubbles where they are and only nudges neighbours.
@@ -27,97 +46,133 @@ Hover a bubble for CPU, memory and thread count. Click it to open the details wi
 - Sidebar with a color and size legend. The size references are drawn at the current zoom, so they match the bubbles on screen. Below the legend are system totals, a top-CPU list (click an entry to open its details), and PIDdle's own CPU use and per-sample cost.
 - A dark interface that stays dark and readable even when the desktop forces a light GTK color scheme, as KDE's Breeze does. PIDdle also hides the harmless `Unknown key gtk-modules` warning that KDE's GTK4 settings cause.
 
-## Keyboard
-
 | Key | Action |
 |---|---|
 | Ctrl+S | Save a screenshot and copy it to the clipboard |
 | Start typing | Search |
 | Esc | Clear the search |
 
+## Terminal interface
+
+A live process list with system CPU and memory meters. Each row shows CPU (colored with the GUI's scale, with a bar where full means one core), memory with a relative bar, threads and state.
+
+- The same four views: list, by application, by parent, and process tree. Groups and tree branches can be collapsed.
+- Search, sorting (CPU, memory, PID, name), active-only and kernel-thread filters, and an adjustable sampling interval.
+- A details popup with CPU history.
+- Terminate and Force Kill with the same safety rules as the GUI.
+- Uses 24-bit color when the terminal advertises it (`COLORTERM=truecolor`), otherwise the nearest 256-color shades.
+
+| Key | Action |
+|---|---|
+| ↑ ↓ PgUp PgDn Home End | Move |
+| Enter | Details (or collapse a group) |
+| Space | Collapse / expand a group or tree branch |
+| `/` | Search name, command or PID (Esc clears) |
+| `v` or `1`–`4` | View: list, by application, by parent, tree |
+| `s` | Sort: CPU, memory, PID, name |
+| `a` / `K` | Active only / show kernel threads |
+| `+` / `-` | Sampling interval |
+| `p` | Pause / resume |
+| `t` / `x` | Terminate (SIGTERM) / force kill (SIGKILL) |
+| `?` | Help |
+| `q`, Ctrl+C | Quit |
+
 ## Safety when stopping processes
 
 - **Blocked:** PID 1 (init) and kernel threads can't be signalled at all.
-- **Critical:** for desktop-session and core system processes (`gnome-shell`, `systemd`, `Xwayland`, `dbus`, `sddm`, `NetworkManager`, `pipewire` and so on), PIDdle itself, and any process PIDdle runs inside, you have to type the process name before the button unlocks. The details window shows a warning banner for these.
-- **Everything else:** a confirmation dialog where Cancel is the default. It mentions how many child processes there are and suggests Terminate before Force Kill.
+- **Critical:** for desktop-session and core system processes (`gnome-shell`, `systemd`, `Xwayland`, `dbus`, `sddm`, `NetworkManager`, `pipewire` and so on), PIDdle itself, and any process PIDdle runs inside, you have to type the process name to confirm.
+- **Everything else:** a confirmation that defaults to No. It mentions how many child processes there are and suggests Terminate before Force Kill.
 - **PID reuse:** the process's start time is checked again right before `kill(2)`, so a PID that now belongs to a different process is never signalled.
-- These rules live in `piddle_core::actions::assess`, so every front end gets them.
+- These rules live in `piddle_core::actions::assess`, so both interfaces get them.
+
+You can only signal other users' processes when PIDdle runs with the right privileges.
 
 ## Low overhead
 
 - Each sample does one small read of `/proc/<pid>/stat` per process. Command line, owner and application name are read once per process and cached by (PID, start time), so a reused PID is detected.
 - Sampling runs on a background thread. Only the latest snapshot is kept, so the UI never processes a backlog.
-- The canvas draws through GtkSnapshot/GSK render nodes, so the GPU does gradients, clipping, strokes and text rendering.
-- The frame clock stops as soon as nothing visible is changing. While only colors are easing, the canvas redraws at about 20 fps instead of the full refresh rate.
+- GUI: the canvas draws through GtkSnapshot/GSK render nodes, so the GPU does gradients, clipping, strokes and text rendering. The frame clock stops as soon as nothing visible is changing. While only colors are easing, the canvas redraws at about 20 fps.
+- TUI: redraws only when a key is pressed or new data arrives. It uses about 1% of one core at the default 1-second interval.
 
 ## Install
 
-Each script builds the release binary and wraps it, together with the launcher entry, README and license, in a native package:
+There are two packages:
 
-| Distribution | Build | Install | Remove |
-|---|---|---|---|
-| Debian, Ubuntu | `packaging/build-deb.sh` | `sudo apt install ./target/debian/piddle_0.1.0_amd64.deb` | `sudo apt remove piddle` |
-| Fedora, RHEL, openSUSE | `packaging/build-rpm.sh` | `sudo dnf install ./target/rpm/piddle-0.1.0-1.x86_64.rpm` | `sudo dnf remove piddle` |
-| Arch Linux | `packaging/build-arch.sh` | `sudo pacman -U target/arch/piddle-0.1.0-1-x86_64.pkg.tar.zst` | `sudo pacman -R piddle` |
+| Package | Contains | Dependencies |
+|---|---|---|
+| `piddle` | `piddle` launcher, `piddle-tui` | none (static binaries); works on any x86_64 Linux |
+| `piddle-gui` | `piddle-gui`, app-menu entry | GTK 4.14+, glibc 2.34+, `piddle` |
 
-All three install `/usr/bin/piddle` and a "PIDdle" entry in the app menu. They need GTK 4.14 or newer and glibc 2.34 or newer.
+On a server, install `piddle`. On a desktop, install both.
 
-- **Dependencies:** the `.deb` gets them from `dpkg-shlibdeps` and the RPM from rpmbuild's library scan. The Arch package declares `gtk4>=4.14`, `glib2`, `cairo`, `pango`, `graphene`, `glibc` and `gcc-libs`.
-- **Building on any distro:** the scripts don't have to run on the target distribution. On Debian you need `rpm` for the RPM and `makepkg` plus `pacman-package-manager` for the Arch package.
-- **Tested:** the RPM installs on Fedora 43 and the Arch package on current Arch Linux, each with all libraries resolved.
+| Distribution | Build | Install |
+|---|---|---|
+| Debian, Ubuntu | `packaging/build-deb.sh` | `sudo apt install ./target/debian/piddle_0.2.0_amd64.deb ./target/debian/piddle-gui_0.2.0_amd64.deb` |
+| Fedora, RHEL, openSUSE | `packaging/build-rpm.sh` | `sudo dnf install ./target/rpm/piddle-0.2.0-1.x86_64.rpm ./target/rpm/piddle-gui-0.2.0-1.x86_64.rpm` |
+| Arch Linux | `packaging/build-arch.sh` | `sudo pacman -U target/arch/piddle-0.2.0-1-x86_64.pkg.tar.zst target/arch/piddle-gui-0.2.0-1-x86_64.pkg.tar.zst` |
+
+Remove with `apt remove`, `dnf remove` or `pacman -R` and the package names.
+
+- **Static terminal binaries:** `piddle` and `piddle-tui` are built for `x86_64-unknown-linux-musl`. They have no runtime dependencies, so they run on older servers too (tested on Debian 12 and Ubuntu 22.04).
+- **GUI dependencies:** for `piddle-gui` they come from `dpkg-shlibdeps` and rpmbuild's library scan. The Arch package declares them explicitly.
+- **Upgrading from 0.1.0**, where `piddle` was the GUI: the `.deb` and `.rpm` move the app-menu entry to `piddle-gui` cleanly. The RPM also installs `piddle-gui` automatically on upgrade.
+- **Building on any distro:** the scripts don't have to run on the target distribution. You need the musl target (`rustup target add x86_64-unknown-linux-musl`). On Debian you also need `rpm` for the RPMs, and `makepkg` plus `pacman-package-manager` for the Arch packages.
+- **Tested:**
+  - Debian 12 server: `piddle` only, no GTK pulled in.
+  - Debian 13 and Fedora 43: upgrade from 0.1.0.
+  - Fedora 43: `piddle` only.
+  - Arch Linux: both packages, with all libraries resolved.
 
 ### Releases
 
-Pushing a version tag builds all three packages on GitHub Actions and attaches them to a GitHub release:
+Pushing a version tag builds all packages on GitHub Actions and attaches them to a GitHub release:
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0     # tag must match the version in Cargo.toml
+git tag v0.2.0 && git push origin v0.2.0     # tag must match the version in Cargo.toml
 ```
 
-The `.deb` and `.rpm` are built on Ubuntu 24.04. The Arch package is built from the same binary in an Arch Linux container. You can also run the **Release** workflow by hand from the Actions tab; it then only builds the packages as downloadable artifacts and publishes nothing.
+The `.deb` and `.rpm` are built on Ubuntu 24.04. The Arch packages are built from the same binaries in an Arch Linux container. You can also run the **Release** workflow by hand from the Actions tab; it then only builds the packages as downloadable artifacts and publishes nothing.
 
 ## Build and run from source
 
-Requirements: Rust (stable, 2024 edition) and GTK ≥ 4.14 development files (`libgtk-4-dev` on Debian/Ubuntu).
+Requirements: Rust (stable, 2024 edition) and GTK ≥ 4.14 development files (`libgtk-4-dev` on Debian/Ubuntu). The terminal interface alone needs no GTK: `cargo build --release -p piddle -p piddle-tui`.
 
 ```sh
-cargo run --release            # runs the GUI (binary name: piddle)
-cargo test --workspace         # unit tests (piddle-core)
+cargo run --release -p piddle-gui      # graphical interface
+cargo run --release -p piddle-tui      # terminal interface
+cargo test --workspace                 # unit tests
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings   # what CI checks
 ```
-
-You can only signal other users' processes when PIDdle runs with the right privileges.
 
 ## Project layout
 
 ```
 crates/
+  piddle/           launcher (binary `piddle`); standard library only
   piddle-core/      UI-independent; depends only on libc and async-channel
     sampler.rs      /proc sampling: Sampler (synchronous) or spawn() (background thread)
     encode.rs       CPU → color, memory → radius, formatting helpers
     actions.rs      risk assessment (assess), PID-reuse-safe signalling, state names
-    examples/top.rs plain-text front end (starting point for a TUI)
-  piddle-gtk/       GTK4 front end (binary `piddle`)
+    examples/top.rs minimal plain-text example
+  piddle-gui/       GTK 4 interface (binary `piddle-gui`)
     view.rs         bubble model, layouts, physics, GSK rendering
     canvas.rs       custom widget that renders the view
     legend.rs       color/size legend
     details.rs      details window, CPU history, confirm / type-to-confirm dialogs
     screenshot.rs   capture the window contents to PNG and clipboard
     main.rs         window, header controls, sidebar, theming, wiring
+  piddle-tui/       Ratatui interface (binary `piddle-tui`)
+    app.rs          state, views, search, keys, confirm flows
+    ui.rs           rendering
+    main.rs         arguments and event loop
 .github/workflows/  ci.yml (fmt, clippy, test, build), release.yml (packages + GitHub release)
 data/               desktop entry
 packaging/          build-deb.sh, build-rpm.sh, build-arch.sh (+ common.sh)
 ```
 
-A future Ratatui TUI only needs to depend on `piddle-core`, for example:
-
-```sh
-cargo run -p piddle-core --example top --release
-```
-
 ## Developer tools
 
-`piddle --snapshot out.png [free|app|parent|tree] [query]` renders the canvas off-screen to a PNG using live data. It still needs a display connection.
+`piddle-gui --snapshot out.png [free|app|parent|tree] [query]` renders the canvas off-screen to a PNG using live data. It still needs a display connection.
 
 ## Contributors
 

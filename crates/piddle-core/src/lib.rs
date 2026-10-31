@@ -8,11 +8,13 @@
 //!   [`sampler::Sampler`] or on a background thread via [`sampler::spawn`].
 //! * [`encode`] — CPU → color and memory → size mappings plus formatting.
 //! * [`actions`] — signalling processes safely, state descriptions.
+//! * [`net`] — a process's network connections, looked up on demand.
 //! * [`GUI_UNAVAILABLE`] — exit code contract between `piddle-gui` and the
 //!   `piddle` launcher.
 
 pub mod actions;
 pub mod encode;
+pub mod net;
 pub mod sampler;
 
 /// Exit code `piddle-gui` uses when it cannot open a display. The `piddle`

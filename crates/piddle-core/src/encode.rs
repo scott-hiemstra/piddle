@@ -57,6 +57,22 @@ pub fn fmt_bytes(b: u64) -> String {
     }
 }
 
+/// Compact byte rate for table columns: "0", "512B", "1.2K", "34M", "1.1G".
+pub fn fmt_rate(bps: f64) -> String {
+    const K: f64 = 1024.0;
+    if bps < 1.0 {
+        "0".into()
+    } else if bps < K {
+        format!("{bps:.0}B")
+    } else if bps < K * K {
+        format!("{:.1}K", bps / K)
+    } else if bps < K * K * K {
+        format!("{:.1}M", bps / (K * K))
+    } else {
+        format!("{:.1}G", bps / (K * K * K))
+    }
+}
+
 pub fn fmt_cpu(cpu: f64) -> String {
     if cpu >= 10.0 { format!("{cpu:.0}%") } else { format!("{cpu:.1}%") }
 }

@@ -18,7 +18,7 @@ pkgbase=piddle
 pkgname=('piddle' 'piddle-gui')
 pkgver=$VERSION
 pkgrel=1
-arch=('x86_64')
+arch=('$ARCH')
 url="$HOMEPAGE"
 license=('MIT')
 options=('!strip' '!debug')
@@ -48,7 +48,7 @@ PKG
 # database; dependencies are declared above and resolved at install time.
 # makepkg is chatty (and Debian's fakeroot can print a harmless race message),
 # so keep its log and only show it if the build fails.
-if ! (cd "$work" && CARCH=x86_64 PKGEXT=.pkg.tar.zst PACKAGER="$MAINTAINER" PACMAN=true \
+if ! (cd "$work" && CARCH=$ARCH PKGEXT=.pkg.tar.zst PACKAGER="$MAINTAINER" PACMAN=true \
   makepkg --force --nodeps --noconfirm >makepkg.log 2>&1); then
   cat "$work/makepkg.log" >&2
   exit 1

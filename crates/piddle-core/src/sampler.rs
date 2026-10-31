@@ -39,6 +39,19 @@ pub struct ProcInfo {
     /// Start time in clock ticks since boot.
     pub start_ticks: u64,
     pub kthread: bool,
+    /// Disk I/O, when collection is enabled and `/proc/<pid>/io` is readable
+    /// (own processes, or all of them when running as root).
+    pub io: Option<IoStats>,
+}
+
+/// Storage I/O of one process: bytes actually read from / written to block
+/// devices (what iotop shows), as totals and per-second rates.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct IoStats {
+    pub read_total: u64,
+    pub write_total: u64,
+    pub read_rate: f64,
+    pub write_rate: f64,
 }
 
 #[derive(Debug)]
@@ -59,11 +72,17 @@ pub struct Snapshot {
 pub struct Control {
     pub interval_ms: AtomicU64,
     pub paused: AtomicBool,
+    /// Also read `/proc/<pid>/io` each sample (one more small read per process).
+    pub collect_io: AtomicBool,
 }
 
 impl Control {
     pub fn new(interval_ms: u64) -> Arc<Self> {
-        Arc::new(Self { interval_ms: AtomicU64::new(interval_ms), paused: AtomicBool::new(false) })
+        Arc::new(Self {
+            interval_ms: AtomicU64::new(interval_ms),
+            paused: AtomicBool::new(false),
+            collect_io: AtomicBool::new(false),
+        })
     }
 }
 
@@ -77,6 +96,10 @@ struct Cached {
     uid: u32,
     prev_ticks: u64,
     seen: bool,
+    /// Previous (read, write) byte totals; None until first read.
+    prev_io: Option<(u64, u64)>,
+    /// `/proc/<pid>/io` was not readable; permissions don't change, so skip it.
+    io_denied: bool,
 }
 
 /// Synchronous sampler: call [`Sampler::sample`] at a steady cadence.
@@ -85,6 +108,8 @@ pub struct Sampler {
     cache: HashMap<i32, Cached>,
     users: HashMap<u32, Arc<str>>,
     buf: String,
+    io_buf: String,
+    collect_io: bool,
     clk_tck: u64,
     page_size: u64,
     ncpu: usize,
@@ -104,6 +129,7 @@ pub fn spawn(control: Arc<Control>) -> async_channel::Receiver<Snapshot> {
             let mut s = Sampler::new();
             loop {
                 if !control.paused.load(Ordering::Relaxed) {
+                    s.set_collect_io(control.collect_io.load(Ordering::Relaxed));
                     let snap = s.sample();
                     // Replace an unconsumed snapshot rather than queueing stale data.
                     if tx.force_send(snap).is_err() {
@@ -137,6 +163,8 @@ impl Sampler {
             cache: HashMap::new(),
             users: load_users(),
             buf: String::with_capacity(1024),
+            io_buf: String::with_capacity(512),
+            collect_io: false,
             clk_tck,
             page_size,
             ncpu,
@@ -145,6 +173,11 @@ impl Sampler {
             prev_cpu: (0, 0),
             self_pid: std::process::id() as i32,
         }
+    }
+
+    /// Enable or disable per-process disk I/O collection.
+    pub fn set_collect_io(&mut self, on: bool) {
+        self.collect_io = on;
     }
 
     pub fn sample(&mut self) -> Snapshot {
@@ -211,6 +244,26 @@ impl Sampler {
         cached.prev_ticks = total_ticks;
         cached.seen = true;
 
+        let io = if self.collect_io && !cached.io_denied {
+            match read_io(pid, &mut self.io_buf) {
+                Some((r, w)) => {
+                    let rate = |now: u64, prev: u64| if dt > 0.0 { now.saturating_sub(prev) as f64 / dt } else { 0.0 };
+                    let (read_rate, write_rate) = match cached.prev_io {
+                        Some((pr, pw)) if !first => (rate(r, pr), rate(w, pw)),
+                        _ => (0.0, 0.0),
+                    };
+                    cached.prev_io = Some((r, w));
+                    Some(IoStats { read_total: r, write_total: w, read_rate, write_rate })
+                }
+                None => {
+                    cached.io_denied = true;
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Some(ProcInfo {
             pid,
             ppid: st.ppid,
@@ -228,6 +281,7 @@ impl Sampler {
             nice: st.nice,
             start_ticks: st.start_ticks,
             kthread: st.flags & PF_KTHREAD != 0,
+            io,
         })
     }
 
@@ -261,6 +315,8 @@ impl Sampler {
             uid,
             prev_ticks: u64::MAX,
             seen: false,
+            prev_io: None,
+            io_denied: false,
         }
     }
 
@@ -325,6 +381,25 @@ fn parse_stat(s: &str) -> Option<Stat> {
     })
 }
 
+/// Disk (read_bytes, write_bytes) totals of one process, or None if not
+/// readable. For front ends that need a single process without enabling
+/// collection for all of them.
+pub fn io_totals(pid: i32) -> Option<(u64, u64)> {
+    read_io(pid, &mut String::with_capacity(512))
+}
+
+/// (read_bytes, write_bytes) from `/proc/<pid>/io`, or None if not readable.
+fn read_io(pid: i32, buf: &mut String) -> Option<(u64, u64)> {
+    buf.clear();
+    File::open(format!("/proc/{pid}/io")).ok()?.read_to_string(buf).ok()?;
+    parse_io(buf)
+}
+
+fn parse_io(s: &str) -> Option<(u64, u64)> {
+    let field = |key: &str| s.lines().find_map(|l| l.strip_prefix(key)).and_then(|v| v.trim().parse::<u64>().ok());
+    Some((field("read_bytes:")?, field("write_bytes:")?))
+}
+
 /// Re-read a process's start time, used to guard signals against PID reuse.
 pub fn start_ticks_of(pid: i32) -> Option<u64> {
     let s = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -378,6 +453,24 @@ mod tests {
         assert_eq!(st.threads, 7);
         assert_eq!(st.start_ticks, 98765);
         assert_eq!(st.rss_pages, 300);
+    }
+
+    #[test]
+    fn parses_proc_io() {
+        let s = "rchar: 100\nwchar: 200\nsyscr: 3\nsyscw: 4\nread_bytes: 4096\nwrite_bytes: 8192\ncancelled_write_bytes: 0\n";
+        assert_eq!(parse_io(s), Some((4096, 8192)));
+        assert_eq!(parse_io("rchar: 1\n"), None);
+    }
+
+    #[test]
+    fn io_collected_for_own_process() {
+        let mut s = Sampler::new();
+        s.set_collect_io(true);
+        s.sample();
+        std::thread::sleep(Duration::from_millis(30));
+        let snap = s.sample();
+        let me = snap.procs.iter().find(|p| p.pid == snap.self_pid).unwrap();
+        assert!(me.io.is_some(), "own /proc/self/io should be readable");
     }
 
     #[test]

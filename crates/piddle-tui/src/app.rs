@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use piddle_core::actions::{Assessment, Signal, assess, send_signal};
+use piddle_core::net::{Sockets, sockets_of};
 use piddle_core::sampler::{Control, ProcInfo, Snapshot};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::TableState;
@@ -49,6 +50,7 @@ impl View {
 pub enum Sort {
     Cpu,
     Mem,
+    Io,
     Pid,
     Name,
 }
@@ -58,6 +60,7 @@ impl Sort {
         match self {
             Sort::Cpu => "CPU",
             Sort::Mem => "memory",
+            Sort::Io => "disk I/O",
             Sort::Pid => "PID",
             Sort::Name => "name",
         }
@@ -65,7 +68,8 @@ impl Sort {
     fn next(self) -> Self {
         match self {
             Sort::Cpu => Sort::Mem,
-            Sort::Mem => Sort::Pid,
+            Sort::Mem => Sort::Io,
+            Sort::Io => Sort::Pid,
             Sort::Pid => Sort::Name,
             Sort::Name => Sort::Cpu,
         }
@@ -73,7 +77,7 @@ impl Sort {
 }
 
 pub enum Row {
-    Group { key: String, label: String, count: usize, cpu: f32, rss: u64, collapsed: bool },
+    Group { key: String, label: String, count: usize, cpu: f32, rss: u64, io: (f64, f64), collapsed: bool },
     Proc { info: ProcInfo, prefix: String },
 }
 
@@ -111,6 +115,10 @@ pub struct App {
     pub max_rss: u64,
     selected_pid: Option<i32>,
     history_pid: Option<i32>,
+    /// Sockets of the process in the details popup, with when they were read.
+    pub detail_net: Option<(Instant, Option<Sockets>)>,
+    /// Show the disk I/O columns (and collect I/O in the sampler).
+    pub show_io: bool,
     activity: HashMap<i32, Instant>,
     collapsed: HashSet<String>,
     names: HashMap<i32, Arc<str>>,
@@ -136,6 +144,8 @@ impl App {
             max_rss: 1,
             selected_pid: None,
             history_pid: None,
+            detail_net: None,
+            show_io: true,
             activity: HashMap::new(),
             collapsed: HashSet::new(),
             names: HashMap::new(),
@@ -190,6 +200,7 @@ impl App {
             }
         }
         self.snap = Some(snap);
+        self.refresh_net(false);
         self.rebuild();
     }
 
@@ -212,6 +223,7 @@ impl App {
         match self.sort {
             Sort::Cpu => b.cpu.total_cmp(&a.cpu).then(b.rss.cmp(&a.rss)),
             Sort::Mem => b.rss.cmp(&a.rss),
+            Sort::Io => io_rate(b).total_cmp(&io_rate(a)).then(b.cpu.total_cmp(&a.cpu)),
             Sort::Pid => a.pid.cmp(&b.pid),
             Sort::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.pid.cmp(&b.pid)),
         }
@@ -251,23 +263,31 @@ impl App {
                 }
                 let sum =
                     |g: &Vec<&ProcInfo>| (g.iter().map(|p| p.cpu).sum::<f32>(), g.iter().map(|p| p.rss).sum::<u64>());
+                let io_sum = |g: &Vec<&ProcInfo>| {
+                    g.iter().filter_map(|p| p.io).fold((0.0, 0.0), |(r, w), io| (r + io.read_rate, w + io.write_rate))
+                };
                 groups.sort_by(|a, b| {
                     let ((ca, ma), (cb, mb)) = (sum(&a.2), sum(&b.2));
                     match self.sort {
                         Sort::Cpu => cb.total_cmp(&ca).then(mb.cmp(&ma)),
                         Sort::Mem => mb.cmp(&ma),
+                        Sort::Io => {
+                            let (ia, ib) = (io_sum(&a.2), io_sum(&b.2));
+                            (ib.0 + ib.1).total_cmp(&(ia.0 + ia.1))
+                        }
                         Sort::Pid => a.2[0].pid.cmp(&b.2[0].pid),
                         Sort::Name => a.1.to_lowercase().cmp(&b.1.to_lowercase()),
                     }
                 });
                 for (key, label, members) in groups {
                     let (cpu, rss) = sum(&members);
+                    let io = io_sum(&members);
                     let collapsed = self.collapsed.contains(&key);
                     if members.len() == 1 && self.view == View::App {
                         rows.push(Row::Proc { info: members[0].clone(), prefix: String::new() });
                         continue;
                     }
-                    rows.push(Row::Group { key, label, count: members.len(), cpu, rss, collapsed });
+                    rows.push(Row::Group { key, label, count: members.len(), cpu, rss, io, collapsed });
                     if !collapsed {
                         let n = members.len();
                         for (i, p) in members.into_iter().enumerate() {
@@ -365,6 +385,22 @@ impl App {
                 self.history_pid = Some(pid);
             }
             self.mode = Mode::Details;
+            self.refresh_net(true);
+        }
+    }
+
+    /// Re-read the details process's sockets every couple of seconds while
+    /// the popup is open (this walks its file descriptors, so not every sample).
+    fn refresh_net(&mut self, force: bool) {
+        if !matches!(self.mode, Mode::Details) {
+            self.detail_net = None;
+            return;
+        }
+        let stale = self.detail_net.as_ref().is_none_or(|(at, _)| at.elapsed() >= Duration::from_secs(2));
+        if let Some(pid) = self.history_pid
+            && (force || stale)
+        {
+            self.detail_net = Some((Instant::now(), sockets_of(pid)));
         }
     }
 
@@ -510,6 +546,11 @@ impl App {
                     "Showing all processes"
                 });
             }
+            KeyCode::Char('i') => {
+                self.show_io = !self.show_io;
+                self.control.collect_io.store(self.show_io, Ordering::Relaxed);
+                self.set_status(if self.show_io { "Disk I/O columns shown" } else { "Disk I/O columns hidden" });
+            }
             KeyCode::Char('K') => {
                 self.show_kernel = !self.show_kernel;
                 self.rebuild();
@@ -533,6 +574,11 @@ impl App {
         self.rebuild();
         self.set_status(format!("View: {}", v.name()));
     }
+}
+
+/// Combined read + write bytes per second (0 when unknown).
+pub fn io_rate(p: &ProcInfo) -> f64 {
+    p.io.map(|io| io.read_rate + io.write_rate).unwrap_or(0.0)
 }
 
 #[cfg(test)]
@@ -559,6 +605,7 @@ mod tests {
             nice: 0,
             start_ticks: 0,
             kthread: false,
+            io: None,
         }
     }
 
@@ -636,6 +683,7 @@ mod tests {
         app.remember_selection();
         assert_eq!(app.selected().unwrap().name.as_ref(), "sshd");
         app.on_key(key(KeyCode::Char('s'))); // sort by memory (all equal)
+        app.on_key(key(KeyCode::Char('s'))); // sort by disk I/O
         app.on_key(key(KeyCode::Char('s'))); // sort by PID
         assert_eq!(app.selected().unwrap().name.as_ref(), "sshd");
     }

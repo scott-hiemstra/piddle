@@ -4,7 +4,7 @@
 cd "$(dirname "$0")/.."
 . packaging/common.sh
 
-arch=$(dpkg --print-architecture)
+arch=$DEB_ARCH
 out=target/debian
 mkdir -p "$out"
 

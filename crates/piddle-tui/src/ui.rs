@@ -4,7 +4,8 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use piddle_core::actions::{exe_path, fmt_age, state_name};
-use piddle_core::encode::{cpu_color, fmt_bytes, fmt_cpu};
+use piddle_core::encode::{cpu_color, fmt_bytes, fmt_cpu, fmt_rate};
+use piddle_core::net;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -146,16 +147,29 @@ fn cpu_bar(cpu: f64, width: usize) -> String {
 }
 
 fn draw_table(f: &mut Frame, app: &mut App, pal: &Palette, area: Rect) {
-    let header = TRow::new(["PID", "NAME", "USER", "CPU", "", "MEM", "", "THR", "S"])
-        .style(Style::new().fg(pal.fix(DIM)).add_modifier(Modifier::BOLD));
+    let show_io = app.show_io;
+    let mut head = vec!["PID", "NAME", "USER", "CPU", "", "MEM", ""];
+    if show_io {
+        head.extend(["READ/s", "WRITE/s"]);
+    }
+    head.extend(["THR", "S"]);
+    let header = TRow::new(head).style(Style::new().fg(pal.fix(DIM)).add_modifier(Modifier::BOLD));
+    // Disk I/O cells: "–" when the process's I/O isn't readable (other users' processes).
+    let io_cell = |rate: Option<f64>| -> Cell<'static> {
+        match rate {
+            None => Cell::from(Span::styled("–", Style::new().fg(pal.fix(BORDER)))),
+            Some(r) if r < 1.0 => Cell::from(Span::styled("0", Style::new().fg(pal.fix(DIM)))),
+            Some(r) => Cell::from(Span::styled(fmt_rate(r), Style::new().fg(pal.fix(Color::Rgb(120, 200, 160))))),
+        }
+    };
     let max_rss = app.max_rss as f64;
     let rows: Vec<TRow> = app
         .rows
         .iter()
         .map(|r| match r {
-            Row::Group { label, count, cpu, rss, collapsed, .. } => {
+            Row::Group { label, count, cpu, rss, io, collapsed, .. } => {
                 let c = pal.cpu(*cpu as f64);
-                TRow::new(vec![
+                let mut cells = vec![
                     Cell::from(if *collapsed { "▸" } else { "▾" }),
                     Cell::from(Line::from(vec![
                         Span::styled(label.clone(), Style::new().add_modifier(Modifier::BOLD)),
@@ -166,16 +180,18 @@ fn draw_table(f: &mut Frame, app: &mut App, pal: &Palette, area: Rect) {
                     Cell::from(Span::styled(cpu_bar(*cpu as f64, 10), Style::new().fg(c))),
                     Cell::from(fmt_bytes(*rss)),
                     Cell::from(""),
-                    Cell::from(""),
-                    Cell::from(""),
-                ])
-                .style(Style::new().bg(pal.fix(Color::Rgb(22, 26, 34))))
+                ];
+                if show_io {
+                    cells.extend([io_cell(Some(io.0)), io_cell(Some(io.1))]);
+                }
+                cells.extend([Cell::from(""), Cell::from("")]);
+                TRow::new(cells).style(Style::new().bg(pal.fix(Color::Rgb(22, 26, 34))))
             }
             Row::Proc { info: p, prefix } => {
                 let c = pal.cpu(p.cpu as f64);
                 let mem_frac = (p.rss as f64 / max_rss).sqrt();
                 let mem_w = (mem_frac * 6.0).round() as usize;
-                TRow::new(vec![
+                let mut cells = vec![
                     Cell::from(Span::styled(p.pid.to_string(), Style::new().fg(pal.fix(DIM)))),
                     Cell::from(Line::from(vec![
                         Span::styled(prefix.clone(), Style::new().fg(pal.fix(BORDER))),
@@ -189,9 +205,15 @@ fn draw_table(f: &mut Frame, app: &mut App, pal: &Palette, area: Rect) {
                         "■".repeat(mem_w.max(1)),
                         Style::new().fg(pal.fix(Color::Rgb(90, 140, 255))),
                     )),
+                ];
+                if show_io {
+                    cells.extend([io_cell(p.io.map(|i| i.read_rate)), io_cell(p.io.map(|i| i.write_rate))]);
+                }
+                cells.extend([
                     Cell::from(p.threads.to_string()),
                     Cell::from(Span::styled(p.state.to_string(), Style::new().fg(pal.fix(DIM)))),
-                ])
+                ]);
+                TRow::new(cells)
             }
         })
         .collect();
@@ -205,26 +227,29 @@ fn draw_table(f: &mut Frame, app: &mut App, pal: &Palette, area: Rect) {
             Span::raw(format!(" · {} rows ", app.rows.len())),
         ])
     };
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(8),
-            Constraint::Fill(1),
-            Constraint::Length(10),
-            Constraint::Length(6),
-            Constraint::Length(10),
-            Constraint::Length(10),
-            Constraint::Length(6),
-            Constraint::Length(4),
-            Constraint::Length(1),
-        ],
-    )
-    .header(header)
-    .block(
-        Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(pal.fix(BORDER))).title(title),
-    )
-    .row_highlight_style(Style::new().bg(pal.fix(SELECT_BG)).add_modifier(Modifier::BOLD))
-    .column_spacing(1);
+    let mut widths = vec![
+        Constraint::Length(8),
+        Constraint::Fill(1),
+        Constraint::Length(10),
+        Constraint::Length(6),
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(6),
+    ];
+    if show_io {
+        widths.extend([Constraint::Length(7), Constraint::Length(7)]);
+    }
+    widths.extend([Constraint::Length(4), Constraint::Length(1)]);
+    let table = Table::new(rows, widths)
+        .header(header)
+        .block(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::new().fg(pal.fix(BORDER)))
+                .title(title),
+        )
+        .row_highlight_style(Style::new().bg(pal.fix(SELECT_BG)).add_modifier(Modifier::BOLD))
+        .column_spacing(1);
     f.render_stateful_widget(table, area, &mut app.table);
 }
 
@@ -278,7 +303,7 @@ fn popup_block<'a>(title: &'a str, color: Color, pal: &Palette) -> Block<'a> {
 }
 
 fn draw_details(f: &mut Frame, app: &App, pal: &Palette) {
-    let area = popup(f.area(), 84, 24);
+    let area = popup(f.area(), 92, 32);
     f.render_widget(Clear, area);
     let Some(p) = app.detail_proc() else {
         let block = popup_block("Process details", pal.fix(BORDER), pal);
@@ -327,6 +352,20 @@ fn draw_details(f: &mut Frame, app: &App, pal: &Palette) {
             Span::raw(format!("{} resident ({mem_pct:.1}% of RAM) · {} virtual", fmt_bytes(p.rss), fmt_bytes(p.vsize))),
         ]),
         Line::from(vec![label("Threads"), Span::raw(format!("{}   nice {}", p.threads, p.nice))]),
+        Line::from(vec![
+            label("Disk I/O"),
+            Span::raw(match p.io {
+                Some(io) => format!(
+                    "read {}/s · write {}/s   (total {} read, {} written)",
+                    fmt_rate(io.read_rate),
+                    fmt_rate(io.write_rate),
+                    fmt_bytes(io.read_total),
+                    fmt_bytes(io.write_total)
+                ),
+                None if app.show_io => "not accessible (another user's process; run as root to see it)".into(),
+                None => "collection off (press i in the list)".into(),
+            }),
+        ]),
         Line::from(vec![label("Parent"), Span::raw(parent)]),
         Line::from(vec![label("Started"), Span::raw(started)]),
         Line::from(vec![label("Executable"), Span::raw(exe_path(p.pid).unwrap_or_else(|| "not accessible".into()))]),
@@ -337,6 +376,31 @@ fn draw_details(f: &mut Frame, app: &App, pal: &Palette) {
     ];
     if p.kthread {
         lines.push(Line::styled("Kernel thread", Style::new().fg(pal.fix(DIM))));
+    }
+    // Network: sockets matched to the kernel's connection tables.
+    match app.detail_net.as_ref().map(|(_, s)| s) {
+        Some(Some(sockets)) => {
+            lines.push(Line::from(vec![label("Network"), Span::raw(net::summary(sockets))]));
+            let max_rows = 6;
+            for c in sockets.connections.iter().take(max_rows) {
+                let color = if c.state == "LISTEN" { pal.fix(ACCENT) } else { pal.fix(Color::Rgb(120, 200, 160)) };
+                lines.push(Line::from(vec![
+                    Span::raw(" ".repeat(12)),
+                    Span::styled(net::describe(c), Style::new().fg(color)),
+                ]));
+            }
+            if sockets.connections.len() > max_rows {
+                lines.push(Line::styled(
+                    format!("{}… and {} more", " ".repeat(12), sockets.connections.len() - max_rows),
+                    Style::new().fg(pal.fix(DIM)),
+                ));
+            }
+        }
+        Some(None) => lines.push(Line::from(vec![
+            label("Network"),
+            Span::styled("not accessible (another user's process; run as root)", Style::new().fg(pal.fix(DIM))),
+        ])),
+        None => {}
     }
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), info);
 
@@ -453,7 +517,8 @@ fn draw_help(f: &mut Frame, pal: &Palette) {
         ("Space", "collapse / expand group or tree branch"),
         ("/", "search name, command or PID; Esc clears"),
         ("v or 1–4", "view: list, by application, by parent, tree"),
-        ("s", "sort: CPU, memory, PID, name"),
+        ("s", "sort: CPU, memory, disk I/O, PID, name"),
+        ("i", "show / hide disk I/O columns"),
         ("a", "active processes only"),
         ("K", "show / hide kernel threads"),
         ("+ / -", "sampling interval"),

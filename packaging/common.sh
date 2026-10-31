@@ -1,14 +1,22 @@
 # Shared by the build-*.sh packaging scripts. Source it from the repo root.
 #
-# Two packages are produced per format:
+# Two packages are produced per format and architecture:
 #   piddle      launcher (`piddle`) + terminal UI (`piddle-tui`); no GTK, fine for servers
 #   piddle-gui  graphical UI (`piddle-gui`) + desktop entry; depends on piddle
 set -euo pipefail
 
+# Target architecture: PIDDLE_ARCH (x86_64 or aarch64), default the host's.
+ARCH=${PIDDLE_ARCH:-$(uname -m)}
+case "$ARCH" in
+  x86_64) DEB_ARCH=amd64 ;;
+  aarch64) DEB_ARCH=arm64 ;;
+  *) echo "unsupported architecture: $ARCH (x86_64 or aarch64)" >&2; exit 1 ;;
+esac
+
 # The launcher and terminal UI are static musl binaries so they run on any
-# x86_64 Linux (old servers included) with no library dependencies. The GUI
-# needs GTK anyway, so it links against the system glibc.
-MUSL=x86_64-unknown-linux-musl
+# Linux of that architecture (old servers included) with no library
+# dependencies. The GUI needs GTK anyway, so it links against the system glibc.
+MUSL=$ARCH-unknown-linux-musl
 CORE_BIN=target/$MUSL/release
 GUI_BIN=target/release
 
@@ -16,6 +24,11 @@ GUI_BIN=target/release
 # them in one job and packages them in another.
 if [ -z "${PIDDLE_SKIP_BUILD:-}" ]; then
   [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+  if [ "$ARCH" != "$(uname -m)" ]; then
+    echo "Building $ARCH packages needs an $ARCH machine (the GUI links that architecture's GTK)," >&2
+    echo "or prebuilt binaries in $CORE_BIN and $GUI_BIN with PIDDLE_SKIP_BUILD=1." >&2
+    exit 1
+  fi
   cargo build --release --locked --target "$MUSL" -p piddle -p piddle-tui
   cargo build --release --locked -p piddle-gui
 fi

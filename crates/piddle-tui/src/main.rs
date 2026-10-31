@@ -56,6 +56,7 @@ fn main() -> std::io::Result<()> {
     }
 
     let control = Control::new(interval);
+    control.collect_io.store(true, Ordering::Relaxed);
     let rx = sampler::spawn(control.clone());
     let mut app = App::new(control.clone());
     let palette = ui::Palette::detect();

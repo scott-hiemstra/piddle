@@ -14,9 +14,17 @@ concurrency:
 
 jobs:
   check:
-    name: Format, lint, test, build
-    # Ubuntu 24.04 ships GTK 4.14, the minimum PIDdle supports.
-    runs-on: ubuntu-24.04
+    name: Format, lint, test, build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Ubuntu 24.04 ships GTK 4.14, the minimum PIDdle supports.
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -28,9 +36,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.arch }}-unknown-linux-musl
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -45,7 +55,7 @@ jobs:
         run: cargo build --release --locked
 
       - name: Static launcher and terminal UI (musl)
-        run: cargo build --release --locked --target x86_64-unknown-linux-musl -p piddle -p piddle-tui
+        run: cargo build --release --locked --target ${{ matrix.arch }}-unknown-linux-musl -p piddle -p piddle-tui
 
       - name: Launcher and terminal UI link no GTK
         run: |

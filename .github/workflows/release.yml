@@ -1,8 +1,9 @@
 name: Release
 
-# Push a tag like v0.2.0 to build the piddle and piddle-gui packages (.deb,
-# .rpm, Arch) and publish them as a GitHub release. Run it manually to build the packages as workflow
-# artifacts without publishing anything.
+# Push a tag like v0.3.0 to build the piddle and piddle-gui packages (.deb,
+# .rpm, Arch) for x86_64 and aarch64 and publish them as a GitHub release.
+# Run it manually to build the packages as workflow artifacts without
+# publishing anything.
 on:
   push:
     tags: ['v*']
@@ -13,9 +14,16 @@ permissions:
 
 jobs:
   build:
-    name: Binaries, .deb and .rpm
-    # Ubuntu 24.04 ships GTK 4.14, the minimum PIDdle supports.
-    runs-on: ubuntu-24.04
+    name: Binaries, .deb and .rpm (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          # Ubuntu 24.04 ships GTK 4.14, the minimum PIDdle supports.
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -35,9 +43,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.arch }}-unknown-linux-musl
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}
 
       - name: Test
         run: cargo test --workspace --locked
@@ -50,26 +60,30 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: piddle-binaries
+          name: piddle-binaries-${{ matrix.arch }}
           path: |
             target/release/piddle-gui
-            target/x86_64-unknown-linux-musl/release/piddle
-            target/x86_64-unknown-linux-musl/release/piddle-tui
+            target/${{ matrix.arch }}-unknown-linux-musl/release/piddle
+            target/${{ matrix.arch }}-unknown-linux-musl/release/piddle-tui
           if-no-files-found: error
 
       - uses: actions/upload-artifact@v4
         with:
-          name: piddle-deb-rpm
+          name: piddle-deb-rpm-${{ matrix.arch }}
           path: |
             target/debian/*.deb
             target/rpm/*.rpm
           if-no-files-found: error
 
   arch:
-    name: Arch package
+    name: Arch packages (${{ matrix.arch }})
     needs: build
+    strategy:
+      matrix:
+        arch: [x86_64, aarch64]
     runs-on: ubuntu-24.04
-    # Ubuntu has no makepkg, so package the same binaries inside Arch Linux.
+    # Ubuntu has no makepkg, so package the binaries inside Arch Linux.
+    # Packaging only copies files, so the aarch64 package is made here too.
     container: archlinux:latest
     steps:
       - name: Install makepkg
@@ -79,20 +93,20 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: piddle-binaries
+          name: piddle-binaries-${{ matrix.arch }}
           path: target
 
       - name: Build Arch packages
         # makepkg refuses to run as root.
         run: |
-          chmod +x target/release/piddle-gui target/x86_64-unknown-linux-musl/release/piddle*
+          chmod +x target/release/piddle-gui target/${{ matrix.arch }}-unknown-linux-musl/release/piddle*
           useradd -m builder
           chown -R builder .
-          su builder -c 'PIDDLE_SKIP_BUILD=1 packaging/build-arch.sh'
+          su builder -c 'PIDDLE_SKIP_BUILD=1 PIDDLE_ARCH=${{ matrix.arch }} packaging/build-arch.sh'
 
       - uses: actions/upload-artifact@v4
         with:
-          name: piddle-arch
+          name: piddle-arch-${{ matrix.arch }}
           path: target/arch/*.pkg.tar.zst
           if-no-files-found: error
 
@@ -106,19 +120,21 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: piddle-deb-rpm
+          pattern: piddle-deb-rpm-*
           path: dist
+          merge-multiple: true
 
       - uses: actions/download-artifact@v4
         with:
-          name: piddle-arch
+          pattern: piddle-arch-*
           path: dist
+          merge-multiple: true
 
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ls -la dist
+          ls -la dist dist/debian dist/rpm
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "PIDdle $GITHUB_REF_NAME" \

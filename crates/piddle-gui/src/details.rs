@@ -11,7 +11,9 @@ use gtk::{gio, glib};
 
 use crate::view::View;
 use piddle_core::actions::{Assessment, Signal, assess, exe_path, fmt_age, send_signal, state_name};
-use piddle_core::encode::{cpu_color, fmt_bytes, fmt_cpu};
+use piddle_core::encode::{cpu_color, fmt_bytes, fmt_cpu, fmt_rate};
+use piddle_core::net;
+use piddle_core::sampler::io_totals;
 
 /// Seconds of CPU history shown in the graph (one point per refresh).
 const HISTORY: usize = 120;
@@ -29,7 +31,7 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
     let win = gtk::Window::builder()
         .title(format!("{} — PID {}", info.name, pid))
         .transient_for(parent)
-        .default_width(600)
+        .default_width(640)
         .titlebar(&header)
         .build();
     win.add_css_class("details");
@@ -82,6 +84,7 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
     let (cpu_val, cpu_sub) = stat_card(&cards, "CPU");
     let (mem_val, mem_sub) = stat_card(&cards, "MEMORY");
     let (thr_val, thr_sub) = stat_card(&cards, "THREADS");
+    let (io_val, io_sub) = stat_card(&cards, "DISK I/O");
     root.append(&cards);
 
     // ---- CPU history graph
@@ -112,7 +115,18 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
     for (row, key) in ["Parent", "User", "Started", "Priority", "Virtual size", "Executable"].into_iter().enumerate() {
         let k = gtk::Label::builder().label(key).xalign(0.0).yalign(0.0).build();
         k.add_css_class("info-key");
-        let v = gtk::Label::builder().xalign(0.0).selectable(true).wrap(true).hexpand(true).width_chars(32).build();
+        // Equal minimum and maximum width: GTK takes the window's minimum
+        // height at the content's minimum width, so a narrower minimum would
+        // wrap long values (executable paths) onto extra lines there and
+        // trigger "Trying to measure GtkWindow ... needs at least ..." warnings.
+        let v = gtk::Label::builder()
+            .xalign(0.0)
+            .selectable(true)
+            .wrap(true)
+            .hexpand(true)
+            .width_chars(52)
+            .max_width_chars(52)
+            .build();
         v.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         v.add_css_class("info-val");
         grid.attach(&k, 0, row as i32, 1, 1);
@@ -145,6 +159,29 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
     cmd_box.append(&cmd_head);
     cmd_box.append(&cmd_scroll);
     root.append(&cmd_box);
+
+    // ---- network connections (looked up for this process only)
+    let net_head = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    let nh = gtk::Label::builder().label("NETWORK").xalign(0.0).hexpand(true).build();
+    nh.add_css_class("card-label");
+    let net_summary = gtk::Label::builder().xalign(1.0).build();
+    net_summary.add_css_class("card-sub");
+    net_head.append(&nh);
+    net_head.append(&net_summary);
+    let net_list = gtk::Label::builder().xalign(0.0).yalign(0.0).selectable(true).width_chars(48).build();
+    net_list.add_css_class("cmdline");
+    let net_scroll = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .min_content_height(30)
+        .max_content_height(130)
+        .propagate_natural_height(true)
+        .child(&net_list)
+        .build();
+    net_scroll.add_css_class("cmdline-box");
+    let net_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    net_box.append(&net_head);
+    net_box.append(&net_scroll);
+    root.append(&net_box);
 
     // ---- risk banner, shown for blocked or critical processes
     let risk = gtk::Label::builder().xalign(0.0).wrap(true).width_chars(40).max_width_chars(70).visible(false).build();
@@ -180,6 +217,8 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
         let (term, kill) = (term.clone(), kill.clone());
         let (badge, graph, history) = (badge.clone(), graph.clone(), history.clone());
         let (risk, assessment) = (risk.clone(), assessment.clone());
+        let prev_io: std::cell::Cell<Option<(std::time::Instant, u64, u64)>> = Default::default();
+        let ticks = std::cell::Cell::new(0u32);
         move || -> bool {
             let v = view.borrow();
             let Some(p) = v.proc_info(pid).filter(|p| p.start_ticks == start_ticks) else {
@@ -223,13 +262,69 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
             set(&subtitle, &format!("PID {}  ·  {}", p.pid, p.user));
             set(&state_pill, state_name(p.state));
             set(&cpu_val, &fmt_cpu(cpu));
-            set(&cpu_sub, &format!("of one core  ·  {:.1}% total", cpu / m.ncpu.max(1) as f64));
-            cpu_sub.set_tooltip_text(Some(&format!("Share of all {} cores combined", m.ncpu)));
+            set(&cpu_sub, "of one core");
+            cpu_sub.set_tooltip_text(Some(&format!(
+                "{:.1}% of all {} cores combined",
+                cpu / m.ncpu.max(1) as f64,
+                m.ncpu
+            )));
             set(&mem_val, &fmt_bytes(p.rss));
             let mem_pct = if m.mem_total > 0 { p.rss as f64 / m.mem_total as f64 * 100.0 } else { 0.0 };
-            set(&mem_sub, &format!("resident  ·  {mem_pct:.1}% of RAM"));
+            set(&mem_sub, &format!("{mem_pct:.1}% of RAM"));
+            mem_sub.set_tooltip_text(Some("Resident memory (RSS)"));
             set(&thr_val, &p.threads.to_string());
             set(&thr_sub, if p.kthread { "kernel thread" } else { "in this process" });
+
+            // Disk I/O: rate from consecutive readings of this process only.
+            match io_totals(pid) {
+                Some((r, w)) => {
+                    let now = std::time::Instant::now();
+                    let rates = prev_io.get().map(|(at, pr, pw)| {
+                        let dt = now.duration_since(at).as_secs_f64().max(1e-3);
+                        (r.saturating_sub(pr) as f64 / dt, w.saturating_sub(pw) as f64 / dt)
+                    });
+                    prev_io.set(Some((now, r, w)));
+                    match rates {
+                        Some((rr, wr)) => {
+                            set(&io_val, &format!("{}/s", fmt_rate(rr + wr)));
+                            set(&io_sub, &format!("R {}/s · W {}/s", fmt_rate(rr), fmt_rate(wr)));
+                        }
+                        None => {
+                            set(&io_val, "…");
+                            set(&io_sub, &format!("{} read · {} written", fmt_bytes(r), fmt_bytes(w)));
+                        }
+                    }
+                    io_sub.set_tooltip_text(Some(&format!(
+                        "Total since start: {} read, {} written",
+                        fmt_bytes(r),
+                        fmt_bytes(w)
+                    )));
+                }
+                None => {
+                    set(&io_val, "–");
+                    set(&io_sub, "not accessible");
+                    io_sub.set_tooltip_text(Some("Another user's process: run PIDdle as root to see its disk I/O."));
+                }
+            }
+
+            // Network: walking the fd table is costlier, so every 2 s.
+            if ticks.get().is_multiple_of(4) {
+                match net::sockets_of(pid) {
+                    Some(s) => {
+                        set(&net_summary, &net::summary(&s));
+                        let lines: Vec<String> = s.connections.iter().map(net::describe).collect();
+                        set(
+                            &net_list,
+                            &if lines.is_empty() { "no TCP or UDP sockets".into() } else { lines.join("\n") },
+                        );
+                    }
+                    None => {
+                        set(&net_summary, "not accessible");
+                        set(&net_list, "Another user's process: run PIDdle as root to see its sockets.");
+                    }
+                }
+            }
+            ticks.set(ticks.get().wrapping_add(1));
 
             let started = if let Some(since_boot) = p.start_ticks.checked_div(m.clk_tck) {
                 let secs = m.boot_time + since_boot;

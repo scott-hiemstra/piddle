@@ -213,6 +213,7 @@ mod tests {
             nice: 0,
             start_ticks: 0,
             kthread: false,
+            io: None,
         }
     }
 

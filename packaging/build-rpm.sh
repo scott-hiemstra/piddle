@@ -53,7 +53,7 @@ cp -a $stage/. %{buildroot}/
 SPEC
 
 # Library requirements (libgtk-4.so.1 etc.) are generated from each binary.
-rpmbuild --quiet -bb --define "_topdir $top" --define "_dbpath $top/rpmdb" "$top/SPECS/piddle.spec"
+rpmbuild --quiet -bb --target "$ARCH" --define "_topdir $top" --define "_dbpath $top/rpmdb" "$top/SPECS/piddle.spec"
 for f in $(find "$top/RPMS" -name '*.rpm'); do
   mv "$f" target/rpm/
   echo "target/rpm/$(basename "$f")"

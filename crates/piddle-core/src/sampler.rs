@@ -9,8 +9,8 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Kernel thread flag from `include/linux/sched.h`.
@@ -131,11 +131,8 @@ impl Sampler {
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(1) as u64;
         let ncpu = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
         let stat = std::fs::read_to_string("/proc/stat").unwrap_or_default();
-        let boot_time = stat
-            .lines()
-            .find_map(|l| l.strip_prefix("btime "))
-            .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(0);
+        let boot_time =
+            stat.lines().find_map(|l| l.strip_prefix("btime ")).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
         Self {
             cache: HashMap::new(),
             users: load_users(),
@@ -237,11 +234,7 @@ impl Sampler {
     fn load_static(&mut self, pid: i32, st: &Stat) -> Cached {
         let raw = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
         let args: Vec<&[u8]> = raw.split(|&b| b == 0).filter(|a| !a.is_empty()).collect();
-        let cmdline: String = args
-            .iter()
-            .map(|a| String::from_utf8_lossy(a))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let cmdline: String = args.iter().map(|a| String::from_utf8_lossy(a)).collect::<Vec<_>>().join(" ");
 
         // argv[0] basename. Some programs (Chromium, sshd) rewrite argv into a
         // single space-separated string, so cut at the first space in that case.
@@ -255,11 +248,7 @@ impl Sampler {
         let app = if base.is_empty() || st.flags & PF_KTHREAD != 0 { comm.clone() } else { base };
 
         let uid = std::fs::metadata(format!("/proc/{pid}")).map(|m| m.uid()).unwrap_or(u32::MAX);
-        let user = self
-            .users
-            .get(&uid)
-            .cloned()
-            .unwrap_or_else(|| Arc::from(uid.to_string()));
+        let user = self.users.get(&uid).cloned().unwrap_or_else(|| Arc::from(uid.to_string()));
         let search_text = format!("{name}\n{app}\n{cmdline}").to_lowercase();
 
         Cached {

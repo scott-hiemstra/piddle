@@ -1,6 +1,7 @@
 mod canvas;
 mod details;
 mod legend;
+mod screenshot;
 mod view;
 
 use std::cell::{Cell, RefCell};
@@ -10,9 +11,9 @@ use std::sync::atomic::Ordering;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 
+use canvas::Canvas;
 use piddle_core::encode::{self, fmt_bytes, fmt_cpu};
 use piddle_core::sampler::{self, Control};
-use canvas::Canvas;
 use view::{Layout, Motion, View};
 
 const APP_ID: &str = "io.github.piddle";
@@ -159,6 +160,11 @@ headerbar .title { font-weight: 800; letter-spacing: 0.5px; }
 .top-row:hover { background: rgba(255,255,255,0.06); }
 searchentry { min-width: 260px; }
 .matches { color: rgba(200,210,230,0.65); font-size: 12px; }
+.toast { background: rgba(22,26,34,0.97); color: #e6e9ef; border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 999px; padding: 6px 6px 6px 16px; box-shadow: 0 6px 24px rgba(0,0,0,0.45); }
+.toast button { background: #2a3140; color: #e6e9ef; border: none; border-radius: 999px; padding: 4px 12px;
+  box-shadow: none; margin: 0; min-height: 0; }
+.toast button:hover { background: #343c4e; }
 "#;
 
 fn main() -> glib::ExitCode {
@@ -277,6 +283,11 @@ fn build_ui(app: &gtk::Application) {
     pause_btn.set_icon_name("media-playback-pause-symbolic");
     pause_btn.set_tooltip_text(Some("Pause sampling"));
 
+    let shot_btn = gtk::Button::from_icon_name("camera-photo-symbolic");
+    shot_btn.set_tooltip_text(Some("Save a screenshot to Pictures and copy it (Ctrl+S)"));
+    shot_btn.set_action_name(Some("win.screenshot"));
+
+    header.pack_end(&shot_btn);
     header.pack_end(&pause_btn);
     header.pack_end(&interval_dd);
     header.pack_end(&active_btn);
@@ -295,7 +306,11 @@ fn build_ui(app: &gtk::Application) {
         last_frame: Cell::new(0),
         last_draw: Cell::new(0),
     });
-    canvas.connect_resized(glib::clone!(#[weak] anim, move || anim.kick()));
+    canvas.connect_resized(glib::clone!(
+        #[weak]
+        anim,
+        move || anim.kick()
+    ));
 
     // ---------------------------------------------------------------- sidebar
     let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -307,12 +322,18 @@ fn build_ui(app: &gtk::Application) {
     legend_area.set_margin_top(12);
     let legend_scale = Rc::new(Cell::new(1.0f64));
     let legend_ncpu = Rc::new(Cell::new(1usize));
-    legend_area.set_draw_func(glib::clone!(#[strong] legend_scale, #[strong] legend_ncpu, move |w, cr, width, _| {
-        let want = legend::draw(cr, width as f64, legend_scale.get(), legend_ncpu.get()).ceil() as i32;
-        if w.content_height() != want {
-            w.set_content_height(want);
+    legend_area.set_draw_func(glib::clone!(
+        #[strong]
+        legend_scale,
+        #[strong]
+        legend_ncpu,
+        move |w, cr, width, _| {
+            let want = legend::draw(cr, width as f64, legend_scale.get(), legend_ncpu.get()).ceil() as i32;
+            if w.content_height() != want {
+                w.set_content_height(want);
+            }
         }
-    }));
+    ));
     sidebar.append(&legend_area);
 
     let stats_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
@@ -324,7 +345,8 @@ fn build_ui(app: &gtk::Application) {
     stats_box.append(&sec);
     let grid = gtk::Grid::builder().row_spacing(4).column_spacing(12).build();
     let mut stat_vals = Vec::new();
-    for (i, k) in ["CPU (all cores)", "Memory", "Processes", "Threads", "Sample cost", "PIDdle CPU"].iter().enumerate() {
+    for (i, k) in ["CPU (all cores)", "Memory", "Processes", "Threads", "Sample cost", "PIDdle CPU"].iter().enumerate()
+    {
         let kl = gtk::Label::new(Some(k));
         kl.add_css_class("stat-key");
         kl.set_xalign(0.0);
@@ -347,19 +369,37 @@ fn build_ui(app: &gtk::Application) {
     stats_box.append(&top_box);
     sidebar.append(&stats_box);
 
-    let sidebar_scroll = gtk::ScrolledWindow::builder()
-        .hscrollbar_policy(gtk::PolicyType::Never)
-        .child(&sidebar)
-        .build();
+    let sidebar_scroll =
+        gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).child(&sidebar).build();
     sidebar_scroll.add_css_class("sidebar");
     // Keep the sidebar a fixed column; expanding stat labels must not widen it.
     sidebar_scroll.set_hexpand(false);
     sidebar_scroll.set_propagate_natural_width(false);
     sidebar_scroll.set_size_request(290, -1);
 
+    // Transient notice shown after a screenshot, floating over the canvas.
+    let toast_label = gtk::Label::new(None);
+    toast_label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+    toast_label.set_max_width_chars(60);
+    let toast_open = gtk::Button::with_label("Show in folder");
+    let toast_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    toast_box.add_css_class("toast");
+    toast_box.append(&toast_label);
+    toast_box.append(&toast_open);
+    let toast = gtk::Revealer::builder()
+        .child(&toast_box)
+        .transition_type(gtk::RevealerTransitionType::SlideUp)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::End)
+        .margin_bottom(20)
+        .build();
+    let canvas_overlay = gtk::Overlay::new();
+    canvas_overlay.set_child(Some(&canvas));
+    canvas_overlay.add_overlay(&toast);
+
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     body.add_css_class("main");
-    body.append(&canvas);
+    body.append(&canvas_overlay);
     body.append(&sidebar_scroll);
 
     let window = gtk::ApplicationWindow::builder()
@@ -371,33 +411,117 @@ fn build_ui(app: &gtk::Application) {
         .build();
     window.set_titlebar(Some(&header));
 
+    // ---------------------------------------------------------------- screenshot
+    let last_shot: Rc<RefCell<Option<std::path::PathBuf>>> = Rc::default();
+    let toast_timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::default();
+    let show_toast = {
+        let (toast, toast_label, toast_open, toast_timer) =
+            (toast.clone(), toast_label.clone(), toast_open.clone(), toast_timer.clone());
+        move |text: &str, can_open: bool| {
+            toast_label.set_text(text);
+            toast_open.set_visible(can_open);
+            toast.set_visible(true);
+            toast.set_reveal_child(true);
+            if let Some(id) = toast_timer.borrow_mut().take() {
+                id.remove();
+            }
+            let (toast, timer) = (toast.clone(), toast_timer.clone());
+            *toast_timer.borrow_mut() =
+                Some(glib::timeout_add_local_once(std::time::Duration::from_secs(4), move || {
+                    timer.borrow_mut().take();
+                    toast.set_reveal_child(false);
+                }));
+        }
+    };
+    let shot_action = gtk::gio::SimpleAction::new("screenshot", None);
+    shot_action.connect_activate(glib::clone!(
+        #[weak]
+        body,
+        #[weak]
+        toast,
+        #[strong]
+        last_shot,
+        move |_, _| {
+            // Keep a previous notice out of the picture.
+            toast.set_visible(false);
+            let (body2, last_shot, show_toast) = (body.clone(), last_shot.clone(), show_toast.clone());
+            screenshot::capture(&body, move |result| {
+                match result.and_then(|tex| {
+                    body2.clipboard().set_texture(&tex);
+                    screenshot::save(&tex)
+                }) {
+                    Ok(path) => {
+                        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        show_toast(&format!("Saved “{name}” to Pictures · copied to clipboard"), true);
+                        *last_shot.borrow_mut() = Some(path);
+                    }
+                    Err(e) => {
+                        eprintln!("PIDdle: screenshot failed: {e}");
+                        show_toast(&format!("Screenshot failed: {e}"), false);
+                    }
+                }
+            });
+        }
+    ));
+    window.add_action(&shot_action);
+    app.set_accels_for_action("win.screenshot", &["<Control>s"]);
+    toast_open.connect_clicked(glib::clone!(
+        #[weak]
+        window,
+        #[strong]
+        last_shot,
+        move |_| {
+            if let Some(path) = last_shot.borrow().as_ref() {
+                gtk::FileLauncher::new(Some(&gtk::gio::File::for_path(path))).open_containing_folder(
+                    Some(&window),
+                    None::<&gtk::gio::Cancellable>,
+                    |_| {},
+                );
+            }
+        }
+    ));
+
     // ---------------------------------------------------------------- input
     let motion = gtk::EventControllerMotion::new();
-    motion.connect_motion(glib::clone!(#[strong] anim, move |_, x, y| {
-        let mut v = anim.view.borrow_mut();
-        v.mouse = (x, y);
-        let h = v.pick(x, y);
-        let changed = h != v.hover;
-        v.hover = h;
-        drop(v);
-        anim.canvas.set_cursor_from_name(if h.is_some() { Some("pointer") } else { None });
-        if changed || h.is_some() {
+    motion.connect_motion(glib::clone!(
+        #[strong]
+        anim,
+        move |_, x, y| {
+            let mut v = anim.view.borrow_mut();
+            v.mouse = (x, y);
+            let h = v.pick(x, y);
+            let changed = h != v.hover;
+            v.hover = h;
+            drop(v);
+            anim.canvas.set_cursor_from_name(if h.is_some() { Some("pointer") } else { None });
+            if changed || h.is_some() {
+                anim.canvas.queue_draw();
+            }
+        }
+    ));
+    motion.connect_leave(glib::clone!(
+        #[strong]
+        anim,
+        move |_| {
+            anim.view.borrow_mut().hover = None;
             anim.canvas.queue_draw();
         }
-    }));
-    motion.connect_leave(glib::clone!(#[strong] anim, move |_| {
-        anim.view.borrow_mut().hover = None;
-        anim.canvas.queue_draw();
-    }));
+    ));
     canvas.add_controller(motion);
 
     let click = gtk::GestureClick::new();
-    click.connect_released(glib::clone!(#[strong] view, #[weak] window, move |_, _, x, y| {
-        let pid = view.borrow().pick(x, y);
-        if let Some(pid) = pid {
-            details::open(&window, &view, pid);
+    click.connect_released(glib::clone!(
+        #[strong]
+        view,
+        #[weak]
+        window,
+        move |_, _, x, y| {
+            let pid = view.borrow().pick(x, y);
+            if let Some(pid) = pid {
+                details::open(&window, &view, pid);
+            }
         }
-    }));
+    ));
     canvas.add_controller(click);
 
     let update_matches = {
@@ -405,117 +529,165 @@ fn build_ui(app: &gtk::Application) {
         let matches = matches.clone();
         move || {
             let v = view.borrow();
-            matches.set_text(&if v.has_query() { format!("{} match{}", v.matches, if v.matches == 1 { "" } else { "es" }) } else { String::new() });
+            matches.set_text(&if v.has_query() {
+                format!("{} match{}", v.matches, if v.matches == 1 { "" } else { "es" })
+            } else {
+                String::new()
+            });
         }
     };
 
-    search.connect_search_changed(glib::clone!(#[strong] anim, #[strong] update_matches, move |e| {
-        anim.view.borrow_mut().set_query(&e.text());
-        update_matches();
-        anim.canvas.queue_draw();
-    }));
+    search.connect_search_changed(glib::clone!(
+        #[strong]
+        anim,
+        #[strong]
+        update_matches,
+        move |e| {
+            anim.view.borrow_mut().set_query(&e.text());
+            update_matches();
+            anim.canvas.queue_draw();
+        }
+    ));
     search.connect_stop_search(|e| e.set_text(""));
     search.set_key_capture_widget(Some(&window));
 
-    layout_dd.connect_selected_notify(glib::clone!(#[strong] anim, move |d| {
-        let l = match d.selected() {
-            1 => Layout::App,
-            2 => Layout::Parent,
-            3 => Layout::Tree,
-            _ => Layout::Free,
-        };
-        anim.view.borrow_mut().set_layout(l);
-        anim.kick();
-    }));
-    interval_dd.connect_selected_notify(glib::clone!(#[strong] control, move |d| {
-        let ms = [250, 500, 1000, 2000][d.selected().min(3) as usize];
-        control.interval_ms.store(ms, Ordering::Relaxed);
-    }));
-    kernel_btn.connect_toggled(glib::clone!(#[strong] anim, move |b| {
-        let mut v = anim.view.borrow_mut();
-        v.show_kernel = b.is_active();
-        v.refilter();
-        drop(v);
-        anim.kick();
-    }));
-    active_btn.connect_toggled(glib::clone!(#[strong] anim, move |b| {
-        let mut v = anim.view.borrow_mut();
-        v.active_only = b.is_active();
-        v.refilter();
-        drop(v);
-        anim.kick();
-    }));
-    pause_btn.connect_toggled(glib::clone!(#[strong] control, move |b| {
-        control.paused.store(b.is_active(), Ordering::Relaxed);
-        b.set_icon_name(if b.is_active() { "media-playback-start-symbolic" } else { "media-playback-pause-symbolic" });
-        b.set_tooltip_text(Some(if b.is_active() { "Resume sampling" } else { "Pause sampling" }));
-    }));
+    layout_dd.connect_selected_notify(glib::clone!(
+        #[strong]
+        anim,
+        move |d| {
+            let l = match d.selected() {
+                1 => Layout::App,
+                2 => Layout::Parent,
+                3 => Layout::Tree,
+                _ => Layout::Free,
+            };
+            anim.view.borrow_mut().set_layout(l);
+            anim.kick();
+        }
+    ));
+    interval_dd.connect_selected_notify(glib::clone!(
+        #[strong]
+        control,
+        move |d| {
+            let ms = [250, 500, 1000, 2000][d.selected().min(3) as usize];
+            control.interval_ms.store(ms, Ordering::Relaxed);
+        }
+    ));
+    kernel_btn.connect_toggled(glib::clone!(
+        #[strong]
+        anim,
+        move |b| {
+            let mut v = anim.view.borrow_mut();
+            v.show_kernel = b.is_active();
+            v.refilter();
+            drop(v);
+            anim.kick();
+        }
+    ));
+    active_btn.connect_toggled(glib::clone!(
+        #[strong]
+        anim,
+        move |b| {
+            let mut v = anim.view.borrow_mut();
+            v.active_only = b.is_active();
+            v.refilter();
+            drop(v);
+            anim.kick();
+        }
+    ));
+    pause_btn.connect_toggled(glib::clone!(
+        #[strong]
+        control,
+        move |b| {
+            control.paused.store(b.is_active(), Ordering::Relaxed);
+            b.set_icon_name(if b.is_active() {
+                "media-playback-start-symbolic"
+            } else {
+                "media-playback-pause-symbolic"
+            });
+            b.set_tooltip_text(Some(if b.is_active() { "Resume sampling" } else { "Pause sampling" }));
+        }
+    ));
 
     // ---------------------------------------------------------------- data
-    glib::spawn_future_local(glib::clone!(#[strong] anim, #[strong] view, #[weak] window, async move {
-        let mut top_rows: Vec<gtk::Button> = Vec::new();
-        while let Ok(snap) = rx.recv().await {
-            view.borrow_mut().apply(snap);
-            update_matches();
-            anim.kick();
+    glib::spawn_future_local(glib::clone!(
+        #[strong]
+        anim,
+        #[strong]
+        view,
+        #[weak]
+        window,
+        async move {
+            let mut top_rows: Vec<gtk::Button> = Vec::new();
+            while let Ok(snap) = rx.recv().await {
+                view.borrow_mut().apply(snap);
+                update_matches();
+                anim.kick();
 
-            let v = view.borrow();
-            let m = v.meta;
-            stat_vals[0].set_text(&format!("{:.1}%", m.total_cpu));
-            stat_vals[1].set_text(&format!("{} / {}", fmt_bytes(m.mem_used), fmt_bytes(m.mem_total)));
-            stat_vals[2].set_text(&m.procs.to_string());
-            stat_vals[3].set_text(&m.threads.to_string());
-            stat_vals[4].set_text(&format!("{:.1} ms", m.sample_cost.as_secs_f64() * 1000.0));
-            stat_vals[5].set_text(&fmt_cpu(m.self_cpu as f64));
+                let v = view.borrow();
+                let m = v.meta;
+                stat_vals[0].set_text(&format!("{:.1}%", m.total_cpu));
+                stat_vals[1].set_text(&format!("{} / {}", fmt_bytes(m.mem_used), fmt_bytes(m.mem_total)));
+                stat_vals[2].set_text(&m.procs.to_string());
+                stat_vals[3].set_text(&m.threads.to_string());
+                stat_vals[4].set_text(&format!("{:.1} ms", m.sample_cost.as_secs_f64() * 1000.0));
+                stat_vals[5].set_text(&fmt_cpu(m.self_cpu as f64));
 
-            while top_rows.len() < v.top.len() {
-                let btn = gtk::Button::new();
-                btn.add_css_class("flat");
-                btn.add_css_class("top-row");
-                let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-                let name = gtk::Label::new(None);
-                name.set_xalign(0.0);
-                name.set_hexpand(true);
-                name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                let val = gtk::Label::new(None);
-                val.add_css_class("stat-val");
-                row.append(&name);
-                row.append(&val);
-                btn.set_child(Some(&row));
-                btn.connect_clicked(glib::clone!(#[strong] view, #[weak] window, move |b| {
-                    let pid: i32 = b.widget_name().parse().unwrap_or(0);
-                    if view.borrow().bubble(pid).is_some() {
-                        details::open(&window, &view, pid);
-                    }
-                }));
-                top_box.append(&btn);
-                top_rows.push(btn);
-            }
-            for (btn, (name, pid, cpu)) in top_rows.iter().zip(&v.top) {
-                btn.set_widget_name(&pid.to_string());
-                let row = btn.child().and_downcast::<gtk::Box>().unwrap();
-                let nl = row.first_child().and_downcast::<gtk::Label>().unwrap();
-                let vl = row.last_child().and_downcast::<gtk::Label>().unwrap();
-                nl.set_markup(&format!("{}  <span alpha='45%'>{}</span>", view::glib_escape(name), pid));
-                vl.set_text(&fmt_cpu(*cpu as f64));
-                let c = encode::cpu_color(*cpu as f64);
-                vl.set_markup(&format!(
-                    "<span foreground='#{:02x}{:02x}{:02x}'>{}</span>",
-                    (c.0 * 255.0) as u8,
-                    (c.1 * 255.0) as u8,
-                    (c.2 * 255.0) as u8,
-                    fmt_cpu(*cpu as f64)
-                ));
-            }
+                while top_rows.len() < v.top.len() {
+                    let btn = gtk::Button::new();
+                    btn.add_css_class("flat");
+                    btn.add_css_class("top-row");
+                    let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+                    let name = gtk::Label::new(None);
+                    name.set_xalign(0.0);
+                    name.set_hexpand(true);
+                    name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+                    let val = gtk::Label::new(None);
+                    val.add_css_class("stat-val");
+                    row.append(&name);
+                    row.append(&val);
+                    btn.set_child(Some(&row));
+                    btn.connect_clicked(glib::clone!(
+                        #[strong]
+                        view,
+                        #[weak]
+                        window,
+                        move |b| {
+                            let pid: i32 = b.widget_name().parse().unwrap_or(0);
+                            if view.borrow().bubble(pid).is_some() {
+                                details::open(&window, &view, pid);
+                            }
+                        }
+                    ));
+                    top_box.append(&btn);
+                    top_rows.push(btn);
+                }
+                for (btn, (name, pid, cpu)) in top_rows.iter().zip(&v.top) {
+                    btn.set_widget_name(&pid.to_string());
+                    let row = btn.child().and_downcast::<gtk::Box>().unwrap();
+                    let nl = row.first_child().and_downcast::<gtk::Label>().unwrap();
+                    let vl = row.last_child().and_downcast::<gtk::Label>().unwrap();
+                    nl.set_markup(&format!("{}  <span alpha='45%'>{}</span>", view::glib_escape(name), pid));
+                    vl.set_text(&fmt_cpu(*cpu as f64));
+                    let c = encode::cpu_color(*cpu as f64);
+                    vl.set_markup(&format!(
+                        "<span foreground='#{:02x}{:02x}{:02x}'>{}</span>",
+                        (c.0 * 255.0) as u8,
+                        (c.1 * 255.0) as u8,
+                        (c.2 * 255.0) as u8,
+                        fmt_cpu(*cpu as f64)
+                    ));
+                }
 
-            let scale = v.scale();
-            if (legend_scale.get() - scale).abs() / scale.max(1e-6) > 0.02 || legend_ncpu.get() != m.ncpu {
-                legend_scale.set(scale);
-                legend_ncpu.set(m.ncpu);
-                legend_area.queue_draw();
+                let scale = v.scale();
+                if (legend_scale.get() - scale).abs() / scale.max(1e-6) > 0.02 || legend_ncpu.get() != m.ncpu {
+                    legend_scale.set(scale);
+                    legend_ncpu.set(m.ncpu);
+                    legend_area.queue_draw();
+                }
             }
         }
-    }));
+    ));
 
     window.present();
     canvas.grab_focus();
@@ -541,11 +713,11 @@ fn snapshot(path: &str, layout: Layout, query: &str) {
         frames += 1;
     }
     eprintln!("settled after {frames} extra frames, {} bubbles", v.bubbles.len());
-    if query.is_empty() {
-        if let Some(b) = v.bubbles.iter().max_by(|a, b| a.info.cpu.total_cmp(&b.info.cpu)) {
-            v.hover = Some(b.info.pid);
-            v.mouse = v.screen_pos(b.info.pid).unwrap_or((w / 2.0, h / 2.0));
-        }
+    if query.is_empty()
+        && let Some(b) = v.bubbles.iter().max_by(|a, b| a.info.cpu.total_cmp(&b.info.cpu))
+    {
+        v.hover = Some(b.info.pid);
+        v.mouse = v.screen_pos(b.info.pid).unwrap_or((w / 2.0, h / 2.0));
     }
 
     let snap = gtk::Snapshot::new();

@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 use gtk::{gdk, graphene, gsk, pango};
 
+use piddle_core::encode::{Rgb, cpu_color, fmt_bytes, fmt_cpu, mem_radius};
 use piddle_core::sampler::{ProcInfo, Snapshot};
-use piddle_core::encode::{cpu_color, fmt_bytes, fmt_cpu, mem_radius, Rgb};
 
 /// How urgently the scene needs redrawing after a simulation step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -332,7 +332,21 @@ impl View {
                     }
                     None => {
                         fresh_groups.push(groups.len());
-                        Group { key, label, x: 0.0, y: 0.0, vx: 0.0, vy: 0.0, r: 0.0, cx: 0.0, cy: 0.0, hull: 0.0, members: 0, cpu: 0.0, mem: 0 }
+                        Group {
+                            key,
+                            label,
+                            x: 0.0,
+                            y: 0.0,
+                            vx: 0.0,
+                            vy: 0.0,
+                            r: 0.0,
+                            cx: 0.0,
+                            cy: 0.0,
+                            hull: 0.0,
+                            members: 0,
+                            cpu: 0.0,
+                            mem: 0,
+                        }
                     }
                 };
                 groups.push(g);
@@ -436,7 +450,8 @@ impl View {
         let mut n = 0;
         for b in &mut self.bubbles {
             b.matched = !q.is_empty()
-                && ((numeric && b.info.pid.to_string().starts_with(q.as_str())) || b.info.search_text.contains(q.as_str()));
+                && ((numeric && b.info.pid.to_string().starts_with(q.as_str()))
+                    || b.info.search_text.contains(q.as_str()));
             if b.matched && !b.dying {
                 n += 1;
             }
@@ -497,10 +512,10 @@ impl View {
             self.reindex();
             self.rebuild_groups();
             self.layout_tree();
-            if let Some(h) = self.hover {
-                if !self.index.contains_key(&h) {
-                    self.hover = None;
-                }
+            if let Some(h) = self.hover
+                && !self.index.contains_key(&h)
+            {
+                self.hover = None;
             }
         }
 
@@ -974,7 +989,10 @@ impl View {
                     (sr * 1.35) as f32,
                     0.0,
                     1.0,
-                    &[gsk::ColorStop::new(0.0, rgba(hi.0, hi.1, hi.2, 0.96 * a)), gsk::ColorStop::new(1.0, rgba(lo.0, lo.1, lo.2, 0.92 * a))],
+                    &[
+                        gsk::ColorStop::new(0.0, rgba(hi.0, hi.1, hi.2, 0.96 * a)),
+                        gsk::ColorStop::new(1.0, rgba(lo.0, lo.1, lo.2, 0.92 * a)),
+                    ],
                 );
                 snap.pop();
                 ring(snap, sx, sy, sr, 1.0, rgba(hi.0, hi.1, hi.2, 0.5 * a));
@@ -1023,7 +1041,16 @@ impl View {
             let x = sx + b.r * s + 6.0;
             let y = sy - lh / 2.0;
             let a = if dimming && !b.matched { 0.3 } else { 1.0 };
-            card(snap, x - 6.0, y - 2.0, lw + 12.0, lh + 4.0, (lh + 4.0) / 2.0, rgba(0.09, 0.105, 0.14, 0.88 * a), rgba(0.6, 0.7, 0.9, 0.3 * a));
+            card(
+                snap,
+                x - 6.0,
+                y - 2.0,
+                lw + 12.0,
+                lh + 4.0,
+                (lh + 4.0) / 2.0,
+                rgba(0.09, 0.105, 0.14, 0.88 * a),
+                rgba(0.6, 0.7, 0.9, 0.3 * a),
+            );
             text(snap, &l, x, y, rgba(0.86, 0.89, 0.95, 0.95 * a));
         }
     }
@@ -1052,7 +1079,16 @@ impl View {
             let (lw, lh) = (lw as f64, lh as f64);
             let x = gx - lw / 2.0;
             let y = (gy - gr - lh / 2.0).max(4.0);
-            card(snap, x - 8.0, y - 3.0, lw + 16.0, lh + 6.0, (lh + 6.0) / 2.0, rgba(0.09, 0.105, 0.14, 0.92), rgba(0.6, 0.7, 0.9, 0.25));
+            card(
+                snap,
+                x - 8.0,
+                y - 3.0,
+                lw + 16.0,
+                lh + 6.0,
+                (lh + 6.0) / 2.0,
+                rgba(0.09, 0.105, 0.14, 0.92),
+                rgba(0.6, 0.7, 0.9, 0.25),
+            );
             text(snap, &l, x, y, rgba(0.86, 0.89, 0.95, 0.95));
         }
     }

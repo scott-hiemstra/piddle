@@ -22,7 +22,14 @@ fn main() {
             snap.sample_cost.as_secs_f64() * 1e3
         );
         for p in snap.procs.iter().take(5) {
-            println!("  {:>7}  {:<20} {:>6}  {:>10}  {:>3} thr", p.pid, p.name, fmt_cpu(p.cpu as f64), fmt_bytes(p.rss), p.threads);
+            println!(
+                "  {:>7}  {:<20} {:>6}  {:>10}  {:>3} thr",
+                p.pid,
+                p.name,
+                fmt_cpu(p.cpu as f64),
+                fmt_bytes(p.rss),
+                p.threads
+            );
         }
     }
 }

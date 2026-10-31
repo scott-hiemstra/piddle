@@ -43,16 +43,20 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
     // ---- identity: CPU-colored badge, name, subtitle
     let cpu_now = Rc::new(std::cell::Cell::new(info.cpu as f64));
     let badge = gtk::DrawingArea::builder().content_width(44).content_height(44).valign(gtk::Align::Center).build();
-    badge.set_draw_func(glib::clone!(#[strong] cpu_now, move |_, cr, w, h| {
-        let c = cpu_color(cpu_now.get());
-        let (cx, cy, r) = (w as f64 / 2.0, h as f64 / 2.0, w.min(h) as f64 / 2.0 - 1.0);
-        let g = gtk::cairo::RadialGradient::new(cx - r * 0.35, cy - r * 0.4, r * 0.05, cx, cy, r);
-        g.add_color_stop_rgb(0.0, c.0 + (1.0 - c.0) * 0.35, c.1 + (1.0 - c.1) * 0.35, c.2 + (1.0 - c.2) * 0.35);
-        g.add_color_stop_rgb(1.0, c.0 * 0.75, c.1 * 0.75, c.2 * 0.75);
-        let _ = cr.set_source(&g);
-        cr.arc(cx, cy, r, 0.0, TAU);
-        let _ = cr.fill();
-    }));
+    badge.set_draw_func(glib::clone!(
+        #[strong]
+        cpu_now,
+        move |_, cr, w, h| {
+            let c = cpu_color(cpu_now.get());
+            let (cx, cy, r) = (w as f64 / 2.0, h as f64 / 2.0, w.min(h) as f64 / 2.0 - 1.0);
+            let g = gtk::cairo::RadialGradient::new(cx - r * 0.35, cy - r * 0.4, r * 0.05, cx, cy, r);
+            g.add_color_stop_rgb(0.0, c.0 + (1.0 - c.0) * 0.35, c.1 + (1.0 - c.1) * 0.35, c.2 + (1.0 - c.2) * 0.35);
+            g.add_color_stop_rgb(1.0, c.0 * 0.75, c.1 * 0.75, c.2 * 0.75);
+            let _ = cr.set_source(&g);
+            cr.arc(cx, cy, r, 0.0, TAU);
+            let _ = cr.fill();
+        }
+    ));
     let name = gtk::Label::builder().label(&*info.name).xalign(0.0).selectable(true).build();
     name.add_css_class("details-title");
     name.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -93,7 +97,11 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
     graph_head.append(&gr);
     graph_card.append(&graph_head);
     let graph = gtk::DrawingArea::builder().content_height(70).hexpand(true).build();
-    graph.set_draw_func(glib::clone!(#[strong] history, move |_, cr, w, h| draw_history(cr, w as f64, h as f64, &history.borrow())));
+    graph.set_draw_func(glib::clone!(
+        #[strong]
+        history,
+        move |_, cr, w, h| draw_history(cr, w as f64, h as f64, &history.borrow())
+    ));
     graph_card.append(&graph);
     root.append(&graph_card);
 
@@ -223,8 +231,8 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
             set(&thr_val, &p.threads.to_string());
             set(&thr_sub, if p.kthread { "kernel thread" } else { "in this process" });
 
-            let started = if m.clk_tck > 0 {
-                let secs = m.boot_time + p.start_ticks / m.clk_tck;
+            let started = if let Some(since_boot) = p.start_ticks.checked_div(m.clk_tck) {
+                let secs = m.boot_time + since_boot;
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(secs);
                 let at = glib::DateTime::from_unix_local(secs as i64)
                     .ok()
@@ -263,7 +271,12 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
     });
 
     for (btn, sig, verb, detail) in [
-        (&term, Signal::Terminate, "Terminate", "SIGTERM asks the process to shut down cleanly. Unsaved work may still be lost."),
+        (
+            &term,
+            Signal::Terminate,
+            "Terminate",
+            "SIGTERM asks the process to shut down cleanly. Unsaved work may still be lost.",
+        ),
         (
             &kill,
             Signal::Kill,
@@ -274,49 +287,57 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
         let name = info.name.to_string();
         let status = status.clone();
         let assessment = assessment.clone();
-        btn.connect_clicked(glib::clone!(#[weak] win, move |_| {
-            let a = assessment.borrow().clone();
-            if a.blocked.is_some() {
-                return;
-            }
-            let mut detail = detail.to_string();
-            if a.descendants > 0 {
-                detail.push_str(&format!(
-                    "\n\nIt has {} child process{}; they may stop or be left orphaned.",
-                    a.descendants,
-                    if a.descendants == 1 { "" } else { "es" }
-                ));
-            }
-            if sig == Signal::Kill {
-                detail.push_str("\n\nTip: try Terminate first; it lets the process save and exit cleanly.");
-            }
-            let status = status.clone();
-            let win2 = win.clone();
-            let send = move || match send_signal(pid, start_ticks, sig) {
-                Ok(()) => status.set_text(&format!("Sent {} to PID {pid}.", sig.name())),
-                Err(msg) => {
-                    status.set_text(&msg);
-                    gtk::AlertDialog::builder().message("Could not signal process").detail(msg).build().show(Some(&win2));
+        btn.connect_clicked(glib::clone!(
+            #[weak]
+            win,
+            move |_| {
+                let a = assessment.borrow().clone();
+                if a.blocked.is_some() {
+                    return;
                 }
-            };
-            if a.is_critical() {
-                confirm_typed(&win, verb, &name, pid, &a.warnings, &detail, send);
-            } else {
-                let dialog = gtk::AlertDialog::builder()
-                    .modal(true)
-                    .message(format!("{verb} “{name}” (PID {pid})?"))
-                    .detail(detail)
-                    .buttons(["Cancel", verb])
-                    .cancel_button(0)
-                    .default_button(0)
-                    .build();
-                dialog.choose(Some(&win), None::<&gio::Cancellable>, move |res| {
-                    if res == Ok(1) {
-                        send();
+                let mut detail = detail.to_string();
+                if a.descendants > 0 {
+                    detail.push_str(&format!(
+                        "\n\nIt has {} child process{}; they may stop or be left orphaned.",
+                        a.descendants,
+                        if a.descendants == 1 { "" } else { "es" }
+                    ));
+                }
+                if sig == Signal::Kill {
+                    detail.push_str("\n\nTip: try Terminate first; it lets the process save and exit cleanly.");
+                }
+                let status = status.clone();
+                let win2 = win.clone();
+                let send = move || match send_signal(pid, start_ticks, sig) {
+                    Ok(()) => status.set_text(&format!("Sent {} to PID {pid}.", sig.name())),
+                    Err(msg) => {
+                        status.set_text(&msg);
+                        gtk::AlertDialog::builder()
+                            .message("Could not signal process")
+                            .detail(msg)
+                            .build()
+                            .show(Some(&win2));
                     }
-                });
+                };
+                if a.is_critical() {
+                    confirm_typed(&win, verb, &name, pid, &a.warnings, &detail, send);
+                } else {
+                    let dialog = gtk::AlertDialog::builder()
+                        .modal(true)
+                        .message(format!("{verb} “{name}” (PID {pid})?"))
+                        .detail(detail)
+                        .buttons(["Cancel", verb])
+                        .cancel_button(0)
+                        .default_button(0)
+                        .build();
+                    dialog.choose(Some(&win), None::<&gio::Cancellable>, move |res| {
+                        if res == Ok(1) {
+                            send();
+                        }
+                    });
+                }
             }
-        }));
+        ));
     }
 
     win.present();
@@ -357,10 +378,17 @@ fn confirm_typed(
         .build();
     heading.add_css_class("confirm-heading");
     root.append(&heading);
-    let warn = gtk::Label::builder().label(warnings.join("\n\n")).xalign(0.0).wrap(true).width_chars(44).max_width_chars(56).build();
+    let warn = gtk::Label::builder()
+        .label(warnings.join("\n\n"))
+        .xalign(0.0)
+        .wrap(true)
+        .width_chars(44)
+        .max_width_chars(56)
+        .build();
     warn.add_css_class("risk-banner");
     root.append(&warn);
-    let det = gtk::Label::builder().label(detail.trim()).xalign(0.0).wrap(true).width_chars(44).max_width_chars(56).build();
+    let det =
+        gtk::Label::builder().label(detail.trim()).xalign(0.0).wrap(true).width_chars(44).max_width_chars(56).build();
     det.add_css_class("card-sub");
     root.append(&det);
     let prompt = gtk::Label::builder().xalign(0.0).build();
@@ -385,25 +413,47 @@ fn confirm_typed(
     dlg.set_child(Some(&root));
 
     let expected = name.to_string();
-    entry.connect_changed(glib::clone!(#[weak] go, move |e| go.set_sensitive(e.text().trim() == expected)));
-    entry.connect_activate(glib::clone!(#[weak] go, move |_| {
-        if go.is_sensitive() {
-            go.emit_clicked();
+    entry.connect_changed(glib::clone!(
+        #[weak]
+        go,
+        move |e| go.set_sensitive(e.text().trim() == expected)
+    ));
+    entry.connect_activate(glib::clone!(
+        #[weak]
+        go,
+        move |_| {
+            if go.is_sensitive() {
+                go.emit_clicked();
+            }
         }
-    }));
-    cancel.connect_clicked(glib::clone!(#[weak] dlg, move |_| dlg.close()));
-    go.connect_clicked(glib::clone!(#[weak] dlg, move |_| {
-        dlg.close();
-        on_confirm();
-    }));
-    let esc = gtk::EventControllerKey::new();
-    esc.connect_key_pressed(glib::clone!(#[weak] dlg, #[upgrade_or] glib::Propagation::Proceed, move |_, key, _, _| {
-        if key == gtk::gdk::Key::Escape {
+    ));
+    cancel.connect_clicked(glib::clone!(
+        #[weak]
+        dlg,
+        move |_| dlg.close()
+    ));
+    go.connect_clicked(glib::clone!(
+        #[weak]
+        dlg,
+        move |_| {
             dlg.close();
-            return glib::Propagation::Stop;
+            on_confirm();
         }
-        glib::Propagation::Proceed
-    }));
+    ));
+    let esc = gtk::EventControllerKey::new();
+    esc.connect_key_pressed(glib::clone!(
+        #[weak]
+        dlg,
+        #[upgrade_or]
+        glib::Propagation::Proceed,
+        move |_, key, _, _| {
+            if key == gtk::gdk::Key::Escape {
+                dlg.close();
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        }
+    ));
     dlg.add_controller(esc);
     dlg.present();
     entry.grab_focus();

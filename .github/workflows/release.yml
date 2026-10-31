@@ -1,0 +1,121 @@
+name: Release
+
+# Push a tag like v0.1.0 to build the .deb, .rpm and Arch packages and publish
+# them as a GitHub release. Run it manually to build the packages as workflow
+# artifacts without publishing anything.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Binary, .deb and .rpm
+    # Ubuntu 24.04 ships GTK 4.14, the minimum PIDdle supports.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev dpkg-dev fakeroot rpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      - name: Build .deb
+        run: packaging/build-deb.sh
+
+      - name: Build .rpm
+        run: PIDDLE_SKIP_BUILD=1 packaging/build-rpm.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: piddle-binary
+          path: target/release/piddle
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: piddle-deb-rpm
+          path: |
+            target/debian/*.deb
+            target/rpm/*.rpm
+          if-no-files-found: error
+
+  arch:
+    name: Arch package
+    needs: build
+    runs-on: ubuntu-24.04
+    # Ubuntu has no makepkg, so package the same binary inside Arch Linux.
+    container: archlinux:latest
+    steps:
+      - name: Install makepkg
+        run: pacman -Syu --noconfirm --needed base-devel
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: piddle-binary
+          path: target/release
+
+      - name: Build Arch package
+        # makepkg refuses to run as root.
+        run: |
+          chmod +x target/release/piddle
+          useradd -m builder
+          chown -R builder .
+          su builder -c 'PIDDLE_SKIP_BUILD=1 packaging/build-arch.sh'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: piddle-arch
+          path: target/arch/*.pkg.tar.zst
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, arch]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: piddle-deb-rpm
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: piddle-arch
+          path: dist
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la dist
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "PIDdle $GITHUB_REF_NAME" \
+            --generate-notes \
+            dist/debian/*.deb dist/rpm/*.rpm dist/*.pkg.tar.zst

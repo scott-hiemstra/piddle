@@ -5,8 +5,8 @@ use std::f64::consts::TAU;
 
 use gtk::{cairo, pango};
 
-use piddle_core::encode::{cpu_color, fmt_bytes, mem_radius, CPU_SCALE_MAX};
 use crate::view::font;
+use piddle_core::encode::{CPU_SCALE_MAX, cpu_color, fmt_bytes, mem_radius};
 
 /// Draws the legend and returns the height it needs.
 pub fn draw(cr: &cairo::Context, w: f64, scale: f64, ncpu: usize) -> f64 {
@@ -42,7 +42,8 @@ pub fn draw(cr: &cairo::Context, w: f64, scale: f64, ncpu: usize) -> f64 {
     }
     y += 22.0;
 
-    let note = text(cr, 
+    let note = text(
+        cr,
         &format!("100% = one fully used core.\nThis system has {ncpu} cores, so a process can reach {}%.", ncpu * 100),
         10.5,
         false,
@@ -93,7 +94,8 @@ pub fn draw(cr: &cairo::Context, w: f64, scale: f64, ncpu: usize) -> f64 {
     }
     y = base + 24.0;
 
-    let note = text(cr, "Bubble area grows with resident memory. References are shown at the current zoom.", 10.5, false);
+    let note =
+        text(cr, "Bubble area grows with resident memory. References are shown at the current zoom.", 10.5, false);
     note.set_width((bw * pango::SCALE as f64) as i32);
     note.set_wrap(pango::WrapMode::WordChar);
     cr.set_source_rgba(0.7, 0.74, 0.82, 0.75);

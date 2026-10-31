@@ -44,7 +44,9 @@ pub fn send_signal(pid: i32, start_ticks: u64, sig: Signal) -> Result<(), String
     let err = std::io::Error::last_os_error();
     Err(match err.raw_os_error() {
         Some(libc::EPERM) => {
-            format!("Permission denied: PID {pid} belongs to another user. Run PIDdle with sufficient privileges to signal it.")
+            format!(
+                "Permission denied: PID {pid} belongs to another user. Run PIDdle with sufficient privileges to signal it."
+            )
         }
         Some(libc::ESRCH) => format!("PID {pid} has already exited."),
         _ => format!("kill({pid}) failed: {err}"),
@@ -54,12 +56,47 @@ pub fn send_signal(pid: i32, start_ticks: u64, sig: Signal) -> Result<(), String
 /// Processes whose loss takes down the desktop session or core system
 /// services. Matched against the process name and its application name.
 const CRITICAL: &[&str] = &[
-    "systemd", "init", "systemd-logind", "systemd-journald", "systemd-udevd", "dbus-daemon", "dbus-broker",
-    "dbus-broker-launch", "polkitd", "login", "agetty", "sshd", "gnome-shell", "gnome-session-binary",
-    "gnome-session", "gnome-session-service", "mutter", "gdm", "gdm3", "gdm-wayland-session", "gdm-x-session",
-    "gdm-session-worker", "plasmashell", "kwin_wayland", "kwin_x11", "ksmserver", "startplasma-wayland",
-    "startplasma-x11", "sddm", "lightdm", "Xwayland", "Xorg", "X", "NetworkManager", "wpa_supplicant",
-    "pipewire", "wireplumber", "pulseaudio", "udisksd", "containerd", "dockerd",
+    "systemd",
+    "init",
+    "systemd-logind",
+    "systemd-journald",
+    "systemd-udevd",
+    "dbus-daemon",
+    "dbus-broker",
+    "dbus-broker-launch",
+    "polkitd",
+    "login",
+    "agetty",
+    "sshd",
+    "gnome-shell",
+    "gnome-session-binary",
+    "gnome-session",
+    "gnome-session-service",
+    "mutter",
+    "gdm",
+    "gdm3",
+    "gdm-wayland-session",
+    "gdm-x-session",
+    "gdm-session-worker",
+    "plasmashell",
+    "kwin_wayland",
+    "kwin_x11",
+    "ksmserver",
+    "startplasma-wayland",
+    "startplasma-x11",
+    "sddm",
+    "lightdm",
+    "Xwayland",
+    "Xorg",
+    "X",
+    "NetworkManager",
+    "wpa_supplicant",
+    "pipewire",
+    "wireplumber",
+    "pulseaudio",
+    "udisksd",
+    "containerd",
+    "dockerd",
 ];
 
 /// What a front end must know before letting the user signal a process.

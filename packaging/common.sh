@@ -1,8 +1,12 @@
 # Shared by the build-*.sh packaging scripts. Source it from the repo root.
 set -euo pipefail
-[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
-
-cargo build --release -p piddle-gtk
+# Set PIDDLE_SKIP_BUILD=1 to package an existing target/release/piddle, e.g.
+# when CI builds the binary in one job and packages it in another.
+if [ -z "${PIDDLE_SKIP_BUILD:-}" ]; then
+  [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+  cargo build --release -p piddle-gtk
+fi
+[ -x target/release/piddle ] || { echo "target/release/piddle is missing" >&2; exit 1; }
 
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 MAINTAINER="Scott Hiemstra <scott@hiemstra.us>"

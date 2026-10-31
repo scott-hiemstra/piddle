@@ -3,9 +3,9 @@
 use std::cell::{OnceCell, RefCell};
 use std::rc::Rc;
 
+use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
-use gtk::glib;
 
 use crate::view::View;
 

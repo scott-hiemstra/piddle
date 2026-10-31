@@ -1,5 +1,7 @@
 # PIDdle
 
+[![CI](https://github.com/scott-hiemstra/piddle/actions/workflows/ci.yml/badge.svg)](https://github.com/scott-hiemstra/piddle/actions/workflows/ci.yml)
+
 A visual process viewer for Linux, written in Rust with GTK4.
 
 Each running process is a bubble:
@@ -20,9 +22,18 @@ Hover a bubble for CPU, memory and thread count. Click it to open the details wi
   - **Process tree**: a radial tree with the root in the center and one ring per generation. Parent→child links are drawn, and siblings are ordered by PID so the tree doesn't reshuffle. Every parent process gets a tag with its name, PID and child count, even when its bubble is tiny.
 - Search by name, command line or PID prefix. Matches are ringed and everything else is dimmed, so the layout doesn't jump around.
 - Filters: show or hide kernel threads (hidden by default), and **Active only**, which shows processes that used CPU in the last few seconds.
+- Screenshots: the camera button or **Ctrl+S** saves the canvas and sidebar as a full-resolution PNG in `~/Pictures` and copies it to the clipboard. With Ctrl+S, the hover card for the process under the mouse is included.
 - Details window with a live 60-second CPU history, CPU / memory / thread cards, parent, user, start time, priority, executable and command line.
 - Sidebar with a color and size legend. The size references are drawn at the current zoom, so they match the bubbles on screen. Below the legend are system totals, a top-CPU list (click an entry to open its details), and PIDdle's own CPU use and per-sample cost.
 - A dark interface that stays dark and readable even when the desktop forces a light GTK color scheme, as KDE's Breeze does. PIDdle also hides the harmless `Unknown key gtk-modules` warning that KDE's GTK4 settings cause.
+
+## Keyboard
+
+| Key | Action |
+|---|---|
+| Ctrl+S | Save a screenshot and copy it to the clipboard |
+| Start typing | Search |
+| Esc | Clear the search |
 
 ## Safety when stopping processes
 
@@ -55,6 +66,16 @@ All three install `/usr/bin/piddle` and a "PIDdle" entry in the app menu. They n
 - **Building on any distro:** the scripts don't have to run on the target distribution. On Debian you need `rpm` for the RPM and `makepkg` plus `pacman-package-manager` for the Arch package.
 - **Tested:** the RPM installs on Fedora 43 and the Arch package on current Arch Linux, each with all libraries resolved.
 
+### Releases
+
+Pushing a version tag builds all three packages on GitHub Actions and attaches them to a GitHub release:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0     # tag must match the version in Cargo.toml
+```
+
+The `.deb` and `.rpm` are built on Ubuntu 24.04. The Arch package is built from the same binary in an Arch Linux container. You can also run the **Release** workflow by hand from the Actions tab; it then only builds the packages as downloadable artifacts and publishes nothing.
+
 ## Build and run from source
 
 Requirements: Rust (stable, 2024 edition) and GTK ≥ 4.14 development files (`libgtk-4-dev` on Debian/Ubuntu).
@@ -62,6 +83,7 @@ Requirements: Rust (stable, 2024 edition) and GTK ≥ 4.14 development files (`l
 ```sh
 cargo run --release            # runs the GUI (binary name: piddle)
 cargo test --workspace         # unit tests (piddle-core)
+cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings   # what CI checks
 ```
 
 You can only signal other users' processes when PIDdle runs with the right privileges.
@@ -80,7 +102,9 @@ crates/
     canvas.rs       custom widget that renders the view
     legend.rs       color/size legend
     details.rs      details window, CPU history, confirm / type-to-confirm dialogs
+    screenshot.rs   capture the window contents to PNG and clipboard
     main.rs         window, header controls, sidebar, theming, wiring
+.github/workflows/  ci.yml (fmt, clippy, test, build), release.yml (packages + GitHub release)
 data/               desktop entry
 packaging/          build-deb.sh, build-rpm.sh, build-arch.sh (+ common.sh)
 ```

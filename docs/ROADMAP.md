@@ -41,6 +41,11 @@ CPU load, and related things are grouped.
 
    Features: scrub backward, bookmarks, and exportable recordings that can be
    attached to bug reports.
+   - Recordings carry periodic keyframes (full snapshots) and an index, so
+     scrubbing jumps to the nearest keyframe instead of replaying every delta
+     from the start.
+   - Live streams never drop deltas. A slow viewer gets a delta computed from
+     its own last-known state, or a fresh full snapshot.
 5. **piddle-mcp.** A read-only MCP server exposing the current snapshot,
    history and the selected process or workload, so Rook (Claude) can
    investigate the same thing you are looking at. No actions.

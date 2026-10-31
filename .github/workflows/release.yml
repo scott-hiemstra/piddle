@@ -25,7 +25,7 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check tag matches Cargo.toml version
         if: startsWith(github.ref, 'refs/tags/')
@@ -58,7 +58,7 @@ jobs:
       - name: Build .rpm
         run: PIDDLE_SKIP_BUILD=1 packaging/build-rpm.sh
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: piddle-binaries-${{ matrix.arch }}
           path: |
@@ -67,7 +67,7 @@ jobs:
             target/${{ matrix.arch }}-unknown-linux-musl/release/piddle-tui
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: piddle-deb-rpm-${{ matrix.arch }}
           path: |
@@ -89,9 +89,9 @@ jobs:
       - name: Install makepkg
         run: pacman -Syu --noconfirm --needed base-devel
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: piddle-binaries-${{ matrix.arch }}
           path: target
@@ -104,7 +104,7 @@ jobs:
           chown -R builder .
           su builder -c 'PIDDLE_SKIP_BUILD=1 PIDDLE_ARCH=${{ matrix.arch }} packaging/build-arch.sh'
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: piddle-arch-${{ matrix.arch }}
           path: target/arch/*.pkg.tar.zst
@@ -118,13 +118,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: piddle-deb-rpm-*
           path: dist
           merge-multiple: true
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: piddle-arch-*
           path: dist

@@ -16,7 +16,9 @@ CPU load, and related things are grouped.
 1. **kpiddle, read-only TUI first.** Pods with CPU and memory from
    metrics-server, grouped by namespace and workload, with a details popup
    and no actions. Extract shared view code into `piddle-view` only as
-   kpiddle's first screen needs it. Then the GUI bubbles, then actions with
+   kpiddle's first screen needs it. Missing or stale metrics must never look
+   like zero usage, in pods or in namespace/workload totals, and that is part
+   of the first screen's acceptance tests. Then the GUI bubbles, then actions with
    the safety tiers (evict by default, delete as a separate guarded choice).
    See `docs/kpiddle/DESIGN.md` on the `kpiddle` branch.
 2. **Snapshot format and recording/playback.** Define one serialized snapshot

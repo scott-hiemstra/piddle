@@ -3,6 +3,24 @@
 Notable changes in each release. The section for a version is published as
 the release notes on GitHub, and a release fails if its section is missing.
 
+## [0.4.2] - Unreleased
+
+### Fixed
+- TUI: Terminate and Force Kill pressed in the details popup could target
+  the list's selected row instead of the process shown in the popup, if the
+  list had changed underneath (for example a process hidden by *active
+  only*). The confirmation always named the real target, so nothing was
+  signalled silently. The popup also no longer switches to a different
+  process that reuses an exited process's PID.
+- Processes whose names contain invalid UTF-8 disappeared from both
+  interfaces, and couldn't be signalled. Names are now decoded lossily.
+- Turning disk I/O collection off and on again showed a false read/write
+  spike for one sample.
+- A systemd unit name with non-ASCII characters of a particular length could
+  crash the sampler.
+- The GUI logs pane could miss journalctl stopping, leaving a dead stream
+  looking live.
+
 ## [0.4.1] - 2026-11-01
 
 ### Changed
@@ -110,6 +128,7 @@ the release notes on GitHub, and a release fails if its section is missing.
 - Screenshots.
 - `.deb`, `.rpm` and Arch packages, built by GitHub Actions.
 
+[0.4.2]: https://github.com/scott-hiemstra/piddle/compare/v0.4.1...HEAD
 [0.4.1]: https://github.com/scott-hiemstra/piddle/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/scott-hiemstra/piddle/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/scott-hiemstra/piddle/compare/v0.3.1...v0.3.2

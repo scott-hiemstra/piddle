@@ -10,7 +10,7 @@ use std::rc::Rc;
 use gtk::glib;
 use gtk::prelude::*;
 
-use piddle_core::logs::{self, Event, Query, Stream};
+use piddle_core::logs::{self, Query, Stream};
 use piddle_core::sampler::ProcInfo;
 
 /// Lines kept in the view; older ones are dropped from the top.
@@ -134,16 +134,14 @@ pub fn pane(info: &ProcInfo) -> gtk::Widget {
                     }
                     let adj = scroll.vadjustment();
                     let at_bottom = adj.value() + adj.page_size() >= adj.upper() - 4.0;
-                    match ev {
-                        Event::Entry(e) => append(&buf, &e),
-                        Event::Ended(why) => {
-                            notice.set_text(&format!("journalctl stopped: {why}"));
-                            notice.set_visible(true);
-                        }
+                    // This event plus whatever else is queued, then scroll once.
+                    let batch = logs::take_queued(&rx, Some(ev));
+                    for e in &batch.entries {
+                        append(&buf, e);
                     }
-                    // Drain whatever else is queued before scrolling once.
-                    while let Ok(Event::Entry(e)) = rx.try_recv() {
-                        append(&buf, &e);
+                    if let Some(why) = batch.ended {
+                        notice.set_text(&format!("journalctl stopped: {why}"));
+                        notice.set_visible(true);
                     }
                     if buf.line_count() > MAX_LINES {
                         let mut a = buf.start_iter();

@@ -285,7 +285,9 @@ fn pretty(unit: &str) -> String {
     }
     // Shorten trailing UUIDs: vte-spawn-d720a4fc-3656-...-9f3a38c337fd.
     let s = unescape(stem);
-    if s.len() > 36 {
+    // The cut is a byte offset: only split where it falls on a character
+    // boundary (names can hold any Unicode after unescaping).
+    if s.len() > 36 && s.is_char_boundary(s.len() - 36) {
         let (head, tail) = s.split_at(s.len() - 36);
         if tail.bytes().filter(|&b| b == b'-').count() == 4 && tail.bytes().all(|b| b == b'-' || b.is_ascii_hexdigit())
         {
@@ -412,6 +414,23 @@ mod tests {
         assert_eq!((s.kind, &*s.label, s.uid), (ServiceKind::Other, "user-1000", Some(1000)));
         let s = c("/custom/thing");
         assert_eq!((s.kind, &*s.label), (ServiceKind::Other, "thing"));
+    }
+
+    #[test]
+    fn long_unicode_scope_names_do_not_panic() {
+        // 19 × "é" (2 bytes each) + "a" = 39 bytes: byte 3 is mid-character.
+        let stem = "é".repeat(19) + "a";
+        assert_eq!(&*c(&format!("/system.slice/{stem}.scope")).label, stem);
+        // The same name as systemd writes it, escaped.
+        let escaped = "\\xc3\\xa9".repeat(19) + "a";
+        assert_eq!(&*c(&format!("/system.slice/{escaped}.scope")).label, stem);
+        // Mixed: Unicode prefix in front of a real UUID still shortens.
+        let s = c("/system.slice/ünï-d720a4fc-3656-4d71-aeb4-9f3a38c337fd.scope");
+        assert_eq!(&*s.label, "ünï-d720a4fc");
+        // Many lengths, so every boundary position is exercised.
+        for n in 30..45 {
+            let _ = c(&format!("/user.slice/{}x.scope", "€".repeat(n)));
+        }
     }
 
     #[test]

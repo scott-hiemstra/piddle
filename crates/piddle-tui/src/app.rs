@@ -149,22 +149,20 @@ impl LogView {
     /// Take queued entries; true if anything changed.
     fn poll(&mut self) -> bool {
         let Some(s) = &self.stream else { return false };
-        let mut changed = false;
-        while let Ok(ev) = s.rx.try_recv() {
-            changed = true;
-            match ev {
-                logs::Event::Entry(e) => {
-                    if self.lines.len() == MAX_LOG_LINES {
-                        self.lines.pop_front();
-                    }
-                    self.lines.push_back(e);
-                    // Keep the view still while scrolled up.
-                    if self.scroll > 0 {
-                        self.scroll += 1;
-                    }
-                }
-                logs::Event::Ended(why) => self.notice = Some(format!("journalctl stopped: {why}")),
+        let batch = logs::take_queued(&s.rx, None);
+        let changed = !batch.entries.is_empty() || batch.ended.is_some();
+        for e in batch.entries {
+            if self.lines.len() == MAX_LOG_LINES {
+                self.lines.pop_front();
             }
+            self.lines.push_back(e);
+            // Keep the view still while scrolled up.
+            if self.scroll > 0 {
+                self.scroll += 1;
+            }
+        }
+        if let Some(why) = batch.ended {
+            self.notice = Some(format!("journalctl stopped: {why}"));
         }
         changed
     }
@@ -194,6 +192,9 @@ pub struct App {
     pub logs: Option<LogView>,
     selected_pid: Option<i32>,
     history_pid: Option<i32>,
+    /// Start time of the details process: with the PID, its identity, so a
+    /// reused PID is never mistaken for it.
+    history_start: u64,
     /// Sockets of the process in the details popup, with when they were read.
     pub detail_net: Option<(Instant, Option<Sockets>)>,
     /// Show the disk I/O columns (and collect I/O in the sampler).
@@ -224,6 +225,7 @@ impl App {
             max_rss: 1,
             selected_pid: None,
             history_pid: None,
+            history_start: 0,
             detail_net: None,
             show_io: true,
             activity: HashMap::new(),
@@ -251,7 +253,7 @@ impl App {
     /// Latest data for the process shown in the details popup.
     pub fn detail_proc(&self) -> Option<&ProcInfo> {
         let pid = self.history_pid?;
-        self.snap.as_ref()?.procs.iter().find(|p| p.pid == pid)
+        self.snap.as_ref()?.procs.iter().find(|p| p.pid == pid && p.start_ticks == self.history_start)
     }
 
     pub fn set_status(&mut self, s: impl Into<String>) {
@@ -269,7 +271,7 @@ impl App {
         self.names = snap.procs.iter().map(|p| (p.pid, p.name.clone())).collect();
         self.max_rss = snap.procs.iter().map(|p| p.rss).max().unwrap_or(1).max(1);
         if let Some(pid) = self.history_pid {
-            match snap.procs.iter().find(|p| p.pid == pid) {
+            match snap.procs.iter().find(|p| p.pid == pid && p.start_ticks == self.history_start) {
                 Some(p) => {
                     if self.history.len() == HISTORY {
                         self.history.pop_front();
@@ -461,11 +463,12 @@ impl App {
 
     fn open_details(&mut self) {
         if let Some(p) = self.selected() {
-            let (pid, cpu) = (p.pid, p.cpu);
-            if self.history_pid != Some(pid) {
+            let (pid, start, cpu) = (p.pid, p.start_ticks, p.cpu);
+            if self.history_pid != Some(pid) || self.history_start != start {
                 self.history.clear();
                 self.history.push_back(cpu);
                 self.history_pid = Some(pid);
+                self.history_start = start;
             }
             self.mode = Mode::Details;
             self.refresh_net(true);
@@ -541,12 +544,13 @@ impl App {
         }
     }
 
-    fn request_signal(&mut self, sig: Signal) {
-        let info = match self.mode {
-            Mode::Details => self.detail_proc().cloned(),
-            _ => self.selected().cloned(),
-        };
-        let Some(info) = info else { return };
+    /// Ask to signal `target`: the process shown in Details, or the selected
+    /// row in the list. The caller picks it, because the key handler has
+    /// already reset `self.mode` and the list selection can differ from the
+    /// Details process (filters, exits).
+    fn request_signal(&mut self, sig: Signal, target: Option<ProcInfo>) {
+        // None: nothing selected, or the Details process exited (the popup says so).
+        let Some(info) = target else { return };
         let Some(snap) = &self.snap else { return };
         let assessment = assess(&info, &snap.procs, std::process::id() as i32);
         if let Some(why) = &assessment.blocked {
@@ -606,8 +610,14 @@ impl App {
                 _ => self.mode = Mode::Search,
             },
             Mode::Details => match key.code {
-                KeyCode::Char('t') => self.request_signal(Signal::Terminate),
-                KeyCode::Char('x') => self.request_signal(Signal::Kill),
+                KeyCode::Char(c @ ('t' | 'x')) => {
+                    let sig = if c == 't' { Signal::Terminate } else { Signal::Kill };
+                    match self.detail_proc().cloned() {
+                        Some(p) => self.request_signal(sig, Some(p)),
+                        // Exited: keep showing the popup that says so.
+                        None => self.mode = Mode::Details,
+                    }
+                }
                 KeyCode::Char('l') => self.open_logs(),
                 KeyCode::Char('q') => self.quit = true,
                 KeyCode::Esc | KeyCode::Enter => {}
@@ -703,8 +713,8 @@ impl App {
             }
             KeyCode::Char('+') | KeyCode::Char('=') => self.set_interval(1),
             KeyCode::Char('-') => self.set_interval(-1),
-            KeyCode::Char('t') => self.request_signal(Signal::Terminate),
-            KeyCode::Char('x') => self.request_signal(Signal::Kill),
+            KeyCode::Char('t') => self.request_signal(Signal::Terminate, self.selected().cloned()),
+            KeyCode::Char('x') => self.request_signal(Signal::Kill, self.selected().cloned()),
             _ => {}
         }
     }
@@ -835,6 +845,59 @@ mod tests {
         app.on_key(key(KeyCode::Char('l')));
         assert!(matches!(app.mode, Mode::Details) && app.logs.is_none());
         assert!(app.status.as_ref().is_some_and(|(s, _)| s.contains("journalctl -k")));
+    }
+
+    fn pending_target(app: &App) -> Option<i32> {
+        match &app.mode {
+            Mode::Confirm(p) | Mode::ConfirmTyped(p, _) => Some(p.info.pid),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn details_actions_target_the_details_process() {
+        // Nothing here sends a signal: only the pending confirmation is checked.
+        let a = || proc(10, 1, "alpha", 50.0);
+        let b = || proc(20, 1, "beta", 40.0);
+        let mut app = app_with(vec![a(), b()]);
+        app.active_only = true;
+        app.rebuild();
+        assert_eq!(app.selected().map(|p| p.pid), Some(10));
+        app.on_key(key(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Details));
+
+        // alpha goes idle: the active-only list hides it and the selection
+        // moves to beta, while Details still shows alpha.
+        app.activity.remove(&10);
+        let mut idle = a();
+        idle.cpu = 0.0;
+        app.apply(snap(vec![idle, b()]));
+        assert_eq!(app.selected().map(|p| p.pid), Some(20));
+        assert_eq!(app.detail_proc().map(|p| p.pid), Some(10));
+
+        app.on_key(key(KeyCode::Char('t')));
+        assert_eq!(pending_target(&app), Some(10));
+        app.on_key(key(KeyCode::Esc)); // cancel
+        assert!(matches!(app.mode, Mode::Normal));
+
+        // In the list, t still means the selected row.
+        app.on_key(key(KeyCode::Char('x')));
+        assert_eq!(pending_target(&app), Some(20));
+    }
+
+    #[test]
+    fn details_never_follow_a_reused_pid() {
+        let mut app = app_with(vec![proc(10, 1, "alpha", 5.0)]);
+        app.on_key(key(KeyCode::Enter));
+        assert_eq!(app.detail_proc().map(|p| p.name.to_string()).as_deref(), Some("alpha"));
+        // alpha exits and an unrelated process gets PID 10.
+        let mut reused = proc(10, 1, "intruder", 5.0);
+        reused.start_ticks = 999;
+        app.apply(snap(vec![reused]));
+        assert!(app.detail_proc().is_none());
+        app.on_key(key(KeyCode::Char('x')));
+        assert_eq!(pending_target(&app), None);
+        assert!(matches!(app.mode, Mode::Details));
     }
 
     #[test]

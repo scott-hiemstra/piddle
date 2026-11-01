@@ -124,8 +124,10 @@ pub struct Sampler {
     cache: HashMap<i32, Cached>,
     users: HashMap<u32, Arc<str>>,
     buf: String,
+    /// Raw bytes of `/proc/<pid>/stat` and `/proc/<pid>/cgroup`: process
+    /// names and cgroup paths needn't be UTF-8, so they're decoded lossily.
+    raw: Vec<u8>,
     io_buf: String,
-    cg_buf: String,
     /// Interned classifications, keyed by raw cgroup path.
     services: HashMap<Box<str>, Arc<Service>>,
     kernel: Arc<Service>,
@@ -186,8 +188,8 @@ impl Sampler {
             cache: HashMap::new(),
             users: load_users(),
             buf: String::with_capacity(1024),
+            raw: Vec::with_capacity(1024),
             io_buf: String::with_capacity(512),
-            cg_buf: String::with_capacity(256),
             services: HashMap::new(),
             kernel: Service::kernel(),
             unknown: Service::unknown(),
@@ -254,10 +256,7 @@ impl Sampler {
     }
 
     fn read_proc(&mut self, pid: i32, dt: f64, first: bool) -> Option<ProcInfo> {
-        let path = format!("/proc/{pid}/stat");
-        self.buf.clear();
-        File::open(&path).ok()?.read_to_string(&mut self.buf).ok()?;
-        let st = parse_stat(&self.buf)?;
+        let st = parse_stat(&read_lossy(&format!("/proc/{pid}/stat"), &mut self.raw)?)?;
 
         let total_ticks = st.utime + st.stime;
         let cached = match self.cache.get_mut(&pid) {
@@ -273,9 +272,8 @@ impl Sampler {
         if kthread {
             cached.service = self.kernel.clone();
         } else if fresh || (pid as u64).wrapping_add(self.tick).is_multiple_of(CGROUP_EVERY) {
-            self.cg_buf.clear();
-            let ok = File::open(format!("/proc/{pid}/cgroup")).and_then(|mut f| f.read_to_string(&mut self.cg_buf));
-            if let Some(path) = ok.ok().and_then(|_| service::cgroup_path(&self.cg_buf))
+            let text = read_lossy(&format!("/proc/{pid}/cgroup"), &mut self.raw);
+            if let Some(path) = text.as_deref().and_then(service::cgroup_path)
                 && *cached.cgroup != *path
             {
                 cached.service = match self.services.get(path) {
@@ -298,25 +296,9 @@ impl Sampler {
         cached.prev_ticks = total_ticks;
         cached.seen = true;
 
-        let io = if self.collect_io && !cached.io_denied {
-            match read_io(pid, &mut self.io_buf) {
-                Some((r, w)) => {
-                    let rate = |now: u64, prev: u64| if dt > 0.0 { now.saturating_sub(prev) as f64 / dt } else { 0.0 };
-                    let (read_rate, write_rate) = match cached.prev_io {
-                        Some((pr, pw)) if !first => (rate(r, pr), rate(w, pw)),
-                        _ => (0.0, 0.0),
-                    };
-                    cached.prev_io = Some((r, w));
-                    Some(IoStats { read_total: r, write_total: w, read_rate, write_rate })
-                }
-                None => {
-                    cached.io_denied = true;
-                    None
-                }
-            }
-        } else {
-            None
-        };
+        let io_buf = &mut self.io_buf;
+        let io =
+            io_step(&mut cached.prev_io, &mut cached.io_denied, self.collect_io, dt, first, || read_io(pid, io_buf));
 
         Some(ProcInfo {
             pid,
@@ -417,6 +399,49 @@ struct Stat {
     rss_pages: i64,
 }
 
+/// Read a small /proc file whose text may contain non-UTF-8 bytes (process
+/// names, cgroup paths): invalid sequences become U+FFFD instead of the whole
+/// read failing, which would hide the process.
+fn read_lossy<'a>(path: &str, buf: &'a mut Vec<u8>) -> Option<std::borrow::Cow<'a, str>> {
+    buf.clear();
+    File::open(path).ok()?.read_to_end(buf).ok()?;
+    Some(String::from_utf8_lossy(buf))
+}
+
+/// One process's disk I/O for this sample.
+///
+/// `prev` is the counter baseline for rates. While collection is off the
+/// baseline is dropped, so re-enabling starts a fresh baseline instead of
+/// dividing everything accumulated meanwhile by one sampling interval.
+fn io_step(
+    prev: &mut Option<(u64, u64)>,
+    denied: &mut bool,
+    collect: bool,
+    dt: f64,
+    first: bool,
+    read: impl FnOnce() -> Option<(u64, u64)>,
+) -> Option<IoStats> {
+    if !collect {
+        *prev = None;
+        return None;
+    }
+    if *denied {
+        return None;
+    }
+    let Some((r, w)) = read() else {
+        // Permissions don't change for a process's lifetime: stop trying.
+        *denied = true;
+        return None;
+    };
+    let rate = |now: u64, before: u64| if dt > 0.0 { now.saturating_sub(before) as f64 / dt } else { 0.0 };
+    let (read_rate, write_rate) = match *prev {
+        Some((pr, pw)) if !first => (rate(r, pr), rate(w, pw)),
+        _ => (0.0, 0.0),
+    };
+    *prev = Some((r, w));
+    Some(IoStats { read_total: r, write_total: w, read_rate, write_rate })
+}
+
 fn parse_stat(s: &str) -> Option<Stat> {
     // comm may itself contain spaces and parentheses; it ends at the LAST ')'.
     let open = s.find('(')?;
@@ -461,8 +486,7 @@ fn parse_io(s: &str) -> Option<(u64, u64)> {
 
 /// Re-read a process's start time, used to guard signals against PID reuse.
 pub fn start_ticks_of(pid: i32) -> Option<u64> {
-    let s = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    parse_stat(&s).map(|st| st.start_ticks)
+    parse_stat(&read_lossy(&format!("/proc/{pid}/stat"), &mut Vec::new())?).map(|st| st.start_ticks)
 }
 
 fn read_meminfo(buf: &mut String) -> (u64, u64) {
@@ -512,6 +536,65 @@ mod tests {
         assert_eq!(st.threads, 7);
         assert_eq!(st.start_ticks, 98765);
         assert_eq!(st.rss_pages, 300);
+    }
+
+    #[test]
+    fn non_utf8_stat_keeps_the_process() {
+        // Kernel comm is raw bytes; one invalid byte must not drop the record.
+        let dir = std::env::temp_dir().join(format!("piddle-stat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("stat");
+        let mut line = b"4321 (bad\xff name) R 1 4321 4321 0 -1 4194304 0 0 0 0 7 3 0 0 20 0 1 0 555 2048 9 0".to_vec();
+        line.push(b'\n');
+        std::fs::write(&f, &line).unwrap();
+        let mut raw = Vec::new();
+        let text = read_lossy(f.to_str().unwrap(), &mut raw).unwrap();
+        let st = parse_stat(&text).unwrap();
+        assert_eq!(st.comm, "bad\u{FFFD} name");
+        assert_eq!((st.ppid, st.utime, st.stime, st.start_ticks, st.rss_pages), (1, 7, 3, 555, 9));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn process_with_non_utf8_name_is_sampled_and_signalable() {
+        use std::os::unix::ffi::OsStrExt;
+        // Run sleep under a name containing 0xff; comm is taken from it.
+        let dir = std::env::temp_dir().join(format!("piddle-name-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join(std::ffi::OsStr::from_bytes(b"zz\xffsleep"));
+        std::fs::copy("/bin/sleep", &exe).unwrap();
+        let mut child = std::process::Command::new(&exe).arg("30").spawn().unwrap();
+        let pid = child.id() as i32;
+        std::thread::sleep(Duration::from_millis(50));
+        let snap = Sampler::new().sample();
+        let found = snap.procs.iter().find(|p| p.pid == pid).map(|p| p.name.to_string());
+        let ticks = start_ticks_of(pid);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(found.as_deref(), Some("zz\u{FFFD}sleep"));
+        // The PID-reuse guard must be able to read it too, or signals fail.
+        assert!(ticks.is_some());
+    }
+
+    #[test]
+    fn reenabling_io_does_not_spike() {
+        let (mut prev, mut denied) = (None, false);
+        let step = |prev: &mut _, denied: &mut _, collect, counter: u64| {
+            io_step(prev, denied, collect, 1.0, false, || Some((counter, counter)))
+        };
+        assert_eq!(step(&mut prev, &mut denied, true, 0).unwrap().read_rate, 0.0);
+        assert_eq!(step(&mut prev, &mut denied, true, 1_000).unwrap().read_rate, 1_000.0);
+        // Off for three samples while the process keeps reading.
+        for _ in 0..3 {
+            assert!(step(&mut prev, &mut denied, false, 0).is_none());
+        }
+        // First sample back: a new baseline, not 999 kB over one second.
+        assert_eq!(step(&mut prev, &mut denied, true, 1_000_000).unwrap().read_rate, 0.0);
+        assert_eq!(step(&mut prev, &mut denied, true, 1_002_000).unwrap().read_rate, 2_000.0);
+        // Unreadable: stop trying for this process.
+        assert!(io_step(&mut prev, &mut denied, true, 1.0, false, || None).is_none());
+        assert!(denied);
     }
 
     #[test]

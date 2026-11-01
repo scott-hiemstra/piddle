@@ -101,6 +101,28 @@ pub enum Event {
     Ended(String),
 }
 
+/// Everything that was queued at one moment, in order.
+#[derive(Debug, Default, PartialEq)]
+pub struct Batch {
+    pub entries: Vec<Entry>,
+    /// journalctl stopped; why.
+    pub ended: Option<String>,
+}
+
+/// Take `first` (an event already received, e.g. by an async `recv`) plus
+/// everything else queued, without blocking. Both kinds of event are kept:
+/// dropping the end-of-stream event would leave a dead stream looking live.
+pub fn take_queued(rx: &async_channel::Receiver<Event>, first: Option<Event>) -> Batch {
+    let mut b = Batch::default();
+    for ev in first.into_iter().chain(std::iter::from_fn(|| rx.try_recv().ok())) {
+        match ev {
+            Event::Entry(e) => b.entries.push(e),
+            Event::Ended(why) => b.ended = Some(why),
+        }
+    }
+    b
+}
+
 /// A running `journalctl -f`; dropping it stops the process.
 pub struct Stream {
     child: Child,
@@ -436,6 +458,23 @@ mod tests {
         // A unit name that looks like an option stays a value.
         let q = Query::for_process(&proc_in("/system.slice/--help.service", 3), false).unwrap();
         assert_eq!(q.args(), ["--unit=--help.service"]);
+    }
+
+    #[test]
+    fn queued_end_of_stream_is_not_lost() {
+        let (tx, rx) = async_channel::unbounded();
+        let entry = |m: &str| Entry { time_us: 1, priority: 6, pid: None, ident: String::new(), message: m.into() };
+        tx.send_blocking(Event::Entry(entry("two"))).unwrap();
+        tx.send_blocking(Event::Ended("No journal files were found.".into())).unwrap();
+        // "one" was already received by the caller's recv().
+        let b = take_queued(&rx, Some(Event::Entry(entry("one"))));
+        assert_eq!(b.entries.iter().map(|e| e.message.as_str()).collect::<Vec<_>>(), ["one", "two"]);
+        assert_eq!(b.ended.as_deref(), Some("No journal files were found."));
+        assert_eq!(take_queued(&rx, None), Batch::default());
+        // An Ended received first is kept too.
+        tx.send_blocking(Event::Entry(entry("late"))).unwrap();
+        let b = take_queued(&rx, Some(Event::Ended("x".into())));
+        assert_eq!((b.entries.len(), b.ended.as_deref()), (1, Some("x")));
     }
 
     #[test]

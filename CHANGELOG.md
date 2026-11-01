@@ -3,6 +3,18 @@
 Notable changes in each release. The section for a version is published as
 the release notes on GitHub, and a release fails if its section is missing.
 
+## [0.4.1] - Unreleased
+
+### Changed
+- The logs pane in the GUI details window now opens expanded, so the logs
+  are visible without hunting for them. If you collapse it, PIDdle
+  remembers that (in `~/.local/state/piddle/`) until you expand it again.
+
+### Fixed
+- The logs pane's expand arrow was invisible on the dark theme, so the
+  *LOGS* heading didn't look clickable. It now shows, and highlights on
+  hover.
+
 ## [0.4.0] - 2026-11-01
 
 ### Added
@@ -95,6 +107,7 @@ the release notes on GitHub, and a release fails if its section is missing.
 - Screenshots.
 - `.deb`, `.rpm` and Arch packages, built by GitHub Actions.
 
+[0.4.1]: https://github.com/scott-hiemstra/piddle/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/scott-hiemstra/piddle/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/scott-hiemstra/piddle/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/scott-hiemstra/piddle/compare/v0.3.0...v0.3.1

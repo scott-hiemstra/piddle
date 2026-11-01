@@ -1,5 +1,8 @@
 //! Logs pane for the details window: the journal of the process's service,
 //! followed live. journalctl only runs while the pane is expanded.
+//!
+//! The pane opens expanded; collapsing it is remembered (a marker file in
+//! the XDG state directory) until it is expanded again.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -28,6 +31,7 @@ pub fn pane(info: &ProcInfo) -> gtk::Widget {
             .build();
         note.add_css_class("card-sub");
         expander.set_child(Some(&note));
+        expander.set_expanded(!was_collapsed());
         return expander.upcast();
     };
     let pid_q = Query::for_process(info, true);
@@ -166,6 +170,7 @@ pub fn pane(info: &ProcInfo) -> gtk::Widget {
         #[strong]
         generation,
         move |e| {
+            remember_collapsed(!e.is_expanded());
             if e.is_expanded() {
                 start();
             } else {
@@ -184,7 +189,36 @@ pub fn pane(info: &ProcInfo) -> gtk::Widget {
         generation.set(generation.get() + 1);
         stream.borrow_mut().take();
     });
+    // After the handlers, so opening expanded starts the stream.
+    expander.set_expanded(!was_collapsed());
     expander.upcast()
+}
+
+/// `$XDG_STATE_HOME/piddle/logs-collapsed`: present while the user keeps
+/// the logs pane collapsed.
+fn collapsed_marker() -> Option<std::path::PathBuf> {
+    let base = match std::env::var_os("XDG_STATE_HOME").filter(|v| !v.is_empty()) {
+        Some(d) => std::path::PathBuf::from(d),
+        None => std::path::PathBuf::from(std::env::var_os("HOME")?).join(".local/state"),
+    };
+    Some(base.join("piddle/logs-collapsed"))
+}
+
+fn was_collapsed() -> bool {
+    collapsed_marker().is_some_and(|p| p.exists())
+}
+
+fn remember_collapsed(collapsed: bool) {
+    let Some(p) = collapsed_marker() else { return };
+    // Best effort: failing to remember only means the pane opens expanded.
+    if collapsed {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&p, b"");
+    } else {
+        let _ = std::fs::remove_file(&p);
+    }
 }
 
 fn append(buf: &gtk::TextBuffer, e: &logs::Entry) {

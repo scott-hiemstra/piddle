@@ -50,7 +50,7 @@ Hover a bubble for CPU, memory and thread count. Click it to open the details wi
 - Filters: show or hide kernel threads (hidden by default), and **Active only**, which shows processes that used CPU in the last few seconds.
 - Screenshots: the camera button or **Ctrl+S** saves the canvas and sidebar as a full-resolution PNG in `~/Pictures` and copies it to the clipboard. With Ctrl+S, the hover card for the process under the mouse is included.
 - Details window with a live 60-second CPU history, CPU / memory / thread / disk I/O cards, parent, user, service and cgroup, start time, priority, executable, command line, and the process's network connections (TCP and UDP with addresses and state, plus a Unix socket count).
-- **Logs pane** in the details window: expand *Logs* to follow the journal of the process's service live, colored by priority. *This process only* narrows it to the PID, and the equivalent `journalctl` command is shown for copying. journalctl only runs while the pane is open. Reading system services' logs needs the system journal (root, or membership of `systemd-journal` or `adm`); without it the pane says so instead of showing nothing.
+- **Logs pane** at the bottom of the details window, open by default (collapsing it is remembered). It follows the journal of the process's service live, colored by priority. *This process only* narrows it to the PID, and the equivalent `journalctl` command is shown for copying. journalctl only runs while the pane is open. Reading system services' logs needs the system journal (root, or membership of `systemd-journal` or `adm`); without it the pane says so instead of showing nothing.
 - Sidebar with a color and size legend. The size references are drawn at the current zoom, so they match the bubbles on screen. Below the legend are system totals, a top-CPU list (click an entry to open its details), and PIDdle's own CPU use and per-sample cost.
 - A dark interface that stays dark and readable even when the desktop forces a light GTK color scheme, as KDE's Breeze does. PIDdle also hides the harmless `Unknown key gtk-modules` warning that KDE's GTK4 settings cause.
 
@@ -144,9 +144,9 @@ On a server, download and install `piddle`. On a desktop, install both. Then ins
 
 | Distribution | Install (x86_64 file names; ARM64 uses `arm64` / `aarch64`) |
 |---|---|
-| Debian, Ubuntu | `sudo apt install ./piddle_0.4.0_amd64.deb ./piddle-gui_0.4.0_amd64.deb` |
-| Fedora, RHEL, openSUSE | `sudo dnf install ./piddle-0.4.0-1.x86_64.rpm ./piddle-gui-0.4.0-1.x86_64.rpm` |
-| Arch Linux | `sudo pacman -U piddle-0.4.0-1-x86_64.pkg.tar.zst piddle-gui-0.4.0-1-x86_64.pkg.tar.zst` |
+| Debian, Ubuntu | `sudo apt install ./piddle_0.4.1_amd64.deb ./piddle-gui_0.4.1_amd64.deb` |
+| Fedora, RHEL, openSUSE | `sudo dnf install ./piddle-0.4.1-1.x86_64.rpm ./piddle-gui-0.4.1-1.x86_64.rpm` |
+| Arch Linux | `sudo pacman -U piddle-0.4.1-1-x86_64.pkg.tar.zst piddle-gui-0.4.1-1-x86_64.pkg.tar.zst` |
 
 Remove with `apt remove`, `dnf remove` or `pacman -R` and the package names.
 

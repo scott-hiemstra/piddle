@@ -1,4 +1,3 @@
-mod canvas;
 mod details;
 mod journal;
 mod legend;
@@ -12,9 +11,10 @@ use std::sync::atomic::Ordering;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 
-use canvas::Canvas;
 use piddle_core::encode::{self, fmt_bytes, fmt_cpu};
 use piddle_core::sampler::{self, Control};
+use piddle_gtk::Canvas;
+use piddle_gtk::draw::glib_escape;
 use view::{Layout, Motion, View};
 
 const APP_ID: &str = "io.github.piddle";
@@ -498,10 +498,10 @@ fn build_ui(app: &gtk::Application) {
         anim,
         move |_, x, y| {
             let mut v = anim.view.borrow_mut();
-            v.mouse = (x, y);
+            v.scene.mouse = (x, y);
             let h = v.pick(x, y);
-            let changed = h != v.hover;
-            v.hover = h;
+            let changed = h != v.scene.hover;
+            v.scene.hover = h;
             drop(v);
             anim.canvas.set_cursor_from_name(if h.is_some() { Some("pointer") } else { None });
             if changed || h.is_some() {
@@ -513,7 +513,7 @@ fn build_ui(app: &gtk::Application) {
         #[strong]
         anim,
         move |_| {
-            anim.view.borrow_mut().hover = None;
+            anim.view.borrow_mut().scene.hover = None;
             anim.canvas.queue_draw();
         }
     ));
@@ -540,7 +540,7 @@ fn build_ui(app: &gtk::Application) {
         move || {
             let v = view.borrow();
             matches.set_text(&if v.has_query() {
-                format!("{} match{}", v.matches, if v.matches == 1 { "" } else { "es" })
+                format!("{} match{}", v.scene.matches, if v.scene.matches == 1 { "" } else { "es" })
             } else {
                 String::new()
             });
@@ -678,7 +678,7 @@ fn build_ui(app: &gtk::Application) {
                     let row = btn.child().and_downcast::<gtk::Box>().unwrap();
                     let nl = row.first_child().and_downcast::<gtk::Label>().unwrap();
                     let vl = row.last_child().and_downcast::<gtk::Label>().unwrap();
-                    nl.set_markup(&format!("{}  <span alpha='45%'>{}</span>", view::glib_escape(name), pid));
+                    nl.set_markup(&format!("{}  <span alpha='45%'>{}</span>", glib_escape(name), pid));
                     vl.set_text(&fmt_cpu(*cpu as f64));
                     let c = encode::cpu_color(*cpu as f64);
                     vl.set_markup(&format!(
@@ -710,7 +710,7 @@ fn snapshot(path: &str, layout: Layout, query: &str) {
     let rx = sampler::spawn(control);
     let (w, h) = (1100.0, 760.0);
     let mut v = View::new();
-    v.size = (w, h);
+    v.scene.size = (w, h);
     v.set_layout(layout);
     v.set_query(query);
     for _ in 0..4 {
@@ -723,12 +723,12 @@ fn snapshot(path: &str, layout: Layout, query: &str) {
     while v.step(1.0 / 60.0) != Motion::Idle && frames < 1500 {
         frames += 1;
     }
-    eprintln!("settled after {frames} extra frames, {} bubbles", v.bubbles.len());
+    eprintln!("settled after {frames} extra frames, {} bubbles", v.scene.bubbles.len());
     if query.is_empty()
-        && let Some(b) = v.bubbles.iter().max_by(|a, b| a.info.cpu.total_cmp(&b.info.cpu))
+        && let Some(b) = v.scene.bubbles.iter().max_by(|a, b| a.item.info.cpu.total_cmp(&b.item.info.cpu))
     {
-        v.hover = Some(b.info.pid);
-        v.mouse = v.screen_pos(b.info.pid).unwrap_or((w / 2.0, h / 2.0));
+        v.scene.hover = Some(b.item.info.pid);
+        v.scene.mouse = v.screen_pos(b.item.info.pid).unwrap_or((w / 2.0, h / 2.0));
     }
 
     let snap = gtk::Snapshot::new();

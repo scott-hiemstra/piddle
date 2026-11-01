@@ -512,7 +512,7 @@ fn confirm_typed(
     det.add_css_class("card-sub");
     root.append(&det);
     let prompt = gtk::Label::builder().xalign(0.0).build();
-    prompt.set_markup(&format!("Type <b>{}</b> to confirm:", crate::view::glib_escape(name)));
+    prompt.set_markup(&format!("Type <b>{}</b> to confirm:", piddle_gtk::draw::glib_escape(name)));
     root.append(&prompt);
     let entry = gtk::Entry::builder().placeholder_text("process name").build();
     entry.add_css_class("confirm-entry");

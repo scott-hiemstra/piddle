@@ -6,21 +6,22 @@ CPU load, and related things are grouped.
 | Tool       | Scope                               | Status                          |
 |------------|-------------------------------------|---------------------------------|
 | PIDdle     | one machine (GUI + TUI)             | released, 0.4.2                 |
-| kpiddle    | a Kubernetes cluster                | next; design on `kpiddle` branch |
+| kpiddle    | a Kubernetes cluster                | TUI + GUI read-only, in its own repo |
 | recording  | record and play back, for all three | planned                         |
 | piddle-mcp | read-only access for AI agents      | planned                         |
-| piddle-net | remote machines via agents          | design on `piddle-net` branch   |
+| piddle-net | remote machines via agents          | design, in its own repo         |
+
+Each tool has its own repo (kpiddle, piddle-net), and code they share is in
+piddle-common. This file is the family overview; kpiddle's and piddle-net's
+detailed plans live in their repos.
 
 ## Up next
 
-1. **kpiddle, read-only TUI first.** Pods with CPU and memory from
-   metrics-server, grouped by namespace and workload, with a details popup
-   and no actions. Extract shared view code into `piddle-view` only as
-   kpiddle's first screen needs it. Missing or stale metrics must never look
-   like zero usage, in pods or in namespace/workload totals, and that is part
-   of the first screen's acceptance tests. Then the GUI bubbles, then actions with
-   the safety tiers (evict by default, delete as a separate guarded choice).
-   See `docs/kpiddle/DESIGN.md` on the `kpiddle` branch.
+1. **kpiddle.** The read-only TUI and GUI are built (pods with CPU and
+   memory from metrics-server, where missing or stale metrics never look like
+   zero). Next: actions with the safety tiers (evict by default, delete as a
+   separate guarded choice). See the
+   [kpiddle repo](https://github.com/scott-hiemstra/kpiddle).
 2. **Snapshot format and recording/playback.** Define one serialized snapshot
    stream (full, then deltas). It serves as:
    - a recording file,
@@ -38,7 +39,8 @@ CPU load, and related things are grouped.
    history and the selected process or workload. Any MCP-capable agent or
    client can then investigate the same thing you are looking at. No actions.
 4. **piddle-net.** Agents, the directory/key server, and client-bound tokens.
-   See `docs/piddle-net/DESIGN.md` on the `piddle-net` branch.
+   See `docs/DESIGN.md` in the
+   [piddle-net repo](https://github.com/scott-hiemstra/piddle-net).
 
 ## Small items
 
@@ -49,6 +51,9 @@ CPU load, and related things are grouped.
 
 ## Done
 
+- **Repo split.** kpiddle and piddle-net moved to their own repos, and the
+  code they share with PIDdle (bubble scene, encodings, GTK canvas) to
+  piddle-common.
 - **0.4.0: service grouping.** A "By service" view groups processes by
   systemd service, user service, scope or container (Docker, Podman,
   Kubernetes, LXC, nspawn, libvirt), plus OpenRC services, read from

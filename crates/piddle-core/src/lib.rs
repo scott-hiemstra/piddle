@@ -6,7 +6,8 @@
 //!
 //! * [`sampler`] — low-overhead `/proc` sampling, either driven directly via
 //!   [`sampler::Sampler`] or on a background thread via [`sampler::spawn`].
-//! * [`encode`] — CPU → color and memory → size mappings plus formatting.
+//! * [`encode`] — CPU → color and memory → size mappings plus formatting
+//!   (lives in `piddle-encode` from piddle-common, re-exported here).
 //! * [`actions`] — signalling processes safely, state descriptions.
 //! * [`logs`] — journal entries for a process's service, via journalctl.
 //! * [`net`] — a process's network connections, looked up on demand.
@@ -15,11 +16,14 @@
 //!   `piddle` launcher.
 
 pub mod actions;
-pub mod encode;
 pub mod logs;
 pub mod net;
 pub mod sampler;
 pub mod service;
+
+/// Moved to `piddle-encode` (piddle-common) so kpiddle can share it;
+/// re-exported unchanged.
+pub use piddle_encode as encode;
 
 /// Exit code `piddle-gui` uses when it cannot open a display. The `piddle`
 /// launcher then falls back to the terminal UI.

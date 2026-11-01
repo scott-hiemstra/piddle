@@ -1342,6 +1342,23 @@ version = "0.4.2"
 dependencies = [
  "async-channel",
  "libc",
+ "piddle-encode",
+]
+
+[[package]]
+name = "piddle-encode"
+version = "0.1.0"
+source = "git+https://github.com/scott-hiemstra/piddle-common?rev=ae71c77535f9fe68026fa33b4fad775c97dcf9b0#ae71c77535f9fe68026fa33b4fad775c97dcf9b0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "piddle-gtk"
+version = "0.1.0"
+source = "git+https://github.com/scott-hiemstra/piddle-common?rev=ae71c77535f9fe68026fa33b4fad775c97dcf9b0#ae71c77535f9fe68026fa33b4fad775c97dcf9b0"
+dependencies = [
+ "gtk4",
 ]
 
 [[package]]
@@ -1351,7 +1368,14 @@ dependencies = [
  "gtk4",
  "pangocairo",
  "piddle-core",
+ "piddle-gtk",
+ "piddle-scene",
 ]
+
+[[package]]
+name = "piddle-scene"
+version = "0.1.0"
+source = "git+https://github.com/scott-hiemstra/piddle-common?rev=ae71c77535f9fe68026fa33b4fad775c97dcf9b0#ae71c77535f9fe68026fa33b4fad775c97dcf9b0"
 
 [[package]]
 name = "piddle-tui"

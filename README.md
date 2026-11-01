@@ -11,6 +11,8 @@ In the graphical interface, each running process is a bubble:
 
 The terminal interface uses the same CPU colors in a live, sortable process list.
 
+PIDdle is also the name of a small family of viewers that share this visual language: [kpiddle](https://github.com/scott-hiemstra/kpiddle) shows Kubernetes pods, and [piddle-net](https://github.com/scott-hiemstra/piddle-net) (in design) will show processes on remote machines. Code they share lives in [piddle-common](https://github.com/scott-hiemstra/piddle-common).
+
 ![PIDdle graphical interface: processes as bubbles, with the color and size legend and system stats in the sidebar](docs/screenshots/gui-main.png)
 
 ## Usage
@@ -198,22 +200,23 @@ cargo test --workspace                 # unit tests
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings   # what CI checks
 ```
 
+The bubble scene, the color and size encodings and the GTK canvas come from [piddle-common](https://github.com/scott-hiemstra/piddle-common), pinned to a release tag's commit in `Cargo.toml`. To change shared code and PIDdle together, check out piddle-common next to this repo and run `scripts/use-local-common.sh on` (and `off` before committing). After a piddle-common release, `scripts/bump-common.sh vX.Y.Z` moves the pin.
+
 ## Project layout
 
 ```
 crates/
   piddle/           launcher (binary `piddle`); standard library only
-  piddle-core/      UI-independent; depends only on libc and async-channel
+  piddle-core/      UI-independent; depends on libc, async-channel and piddle-encode
     sampler.rs      /proc sampling: Sampler (synchronous) or spawn() (background thread)
-    encode.rs       CPU → color, memory → radius, formatting helpers
     actions.rs      risk assessment (assess), signalling via pidfd (PID-reuse guard), state names
     net.rs          a process's network connections, from /proc/<pid>/fd and /proc/<pid>/net
     service.rs      systemd service / scope / container of a process, from /proc/<pid>/cgroup
     logs.rs         journal entries for a service or PID, streamed from journalctl
     examples/top.rs minimal plain-text example
   piddle-gui/       GTK 4 interface (binary `piddle-gui`)
-    view.rs         bubble model, layouts, physics, GSK rendering
-    canvas.rs       custom widget that renders the view
+    view.rs         processes as bubbles: layouts, grouping, search, GSK rendering
+                    (physics and camera: piddle-scene; canvas widget: piddle-gtk)
     legend.rs       color/size legend
     details.rs      details window, CPU history, confirm / type-to-confirm dialogs
     journal.rs      logs pane in the details window
@@ -227,6 +230,7 @@ crates/
 data/               desktop entry
 docs/screenshots/   README images
 packaging/          build-deb.sh, build-rpm.sh, build-arch.sh (+ common.sh)
+scripts/            use-local-common.sh, bump-common.sh (piddle-common pin)
 ```
 
 ## Developer tools

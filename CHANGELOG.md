@@ -3,6 +3,16 @@
 Notable changes in each release. The section for a version is published as
 the release notes on GitHub, and a release fails if its section is missing.
 
+## [Unreleased]
+
+### Changed
+- Code shared with kpiddle moved to the new
+  [piddle-common](https://github.com/scott-hiemstra/piddle-common) crates:
+  the bubble layout simulation (`piddle-scene`), the color and size
+  encodings and formatting (`piddle-encode`, still re-exported as
+  `piddle_core::encode`) and the GTK canvas (`piddle-gtk`). No visible
+  change. Building from source now fetches piddle-common from GitHub.
+
 ## [0.4.2] - 2026-11-01
 
 ### Fixed

@@ -8,6 +8,14 @@ edition = "2024"
 license = "MIT"
 authors = ["Scott Hiemstra <scott@hiemstra.us>"]
 
+# Shared crates from piddle-common, pinned to a release tag's commit (the
+# same commit for each). scripts/bump-common.sh vX.Y.Z updates them, and
+# scripts/use-local-common.sh builds against a sibling checkout instead.
+[workspace.dependencies]
+piddle-encode = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "ae71c77535f9fe68026fa33b4fad775c97dcf9b0" } # v0.1.0
+piddle-scene = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "ae71c77535f9fe68026fa33b4fad775c97dcf9b0" } # v0.1.0
+piddle-gtk = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "ae71c77535f9fe68026fa33b4fad775c97dcf9b0" } # v0.1.0
+
 [profile.release]
 opt-level = 3
 lto = "thin"

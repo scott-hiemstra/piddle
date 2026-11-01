@@ -5,8 +5,8 @@ use std::f64::consts::TAU;
 
 use gtk::{cairo, pango};
 
-use crate::view::font;
 use piddle_core::encode::{CPU_SCALE_MAX, cpu_color, fmt_bytes, mem_radius};
+use piddle_gtk::draw::font;
 
 /// Draws the legend and returns the height it needs.
 pub fn draw(cr: &cairo::Context, w: f64, scale: f64, ncpu: usize) -> f64 {

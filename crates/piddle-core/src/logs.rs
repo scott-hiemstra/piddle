@@ -356,17 +356,8 @@ impl Parser<'_> {
     }
 }
 
-/// Local wall-clock time "HH:MM:SS" for a journal timestamp.
-pub fn fmt_clock(time_us: u64) -> String {
-    // Type inferred from localtime_r (libc::time_t is deprecated on musl).
-    let t = (time_us / 1_000_000) as _;
-    // SAFETY: localtime_r writes only into `tm`.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
-        return "--:--:--".into();
-    }
-    format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
-}
+/// Moved to `piddle-encode` (piddle-common) so kpiddle can share it.
+pub use piddle_encode::fmt_clock;
 
 /// Short priority tag for display.
 pub fn priority_name(p: u8) -> &'static str {

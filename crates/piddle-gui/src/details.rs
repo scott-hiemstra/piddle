@@ -443,6 +443,23 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
         ));
     }
 
+    // Escape closes the window, like other GTK dialogs. Confirm dialogs are
+    // separate modal windows with their own handling.
+    let esc = gtk::ShortcutController::new();
+    // Capture phase: runs even when a focused child (the logs view) would
+    // otherwise see the key first.
+    esc.set_propagation_phase(gtk::PropagationPhase::Capture);
+    esc.add_shortcut(gtk::Shortcut::new(
+        Some(gtk::KeyvalTrigger::new(gtk::gdk::Key::Escape, gtk::gdk::ModifierType::empty())),
+        Some(gtk::CallbackAction::new(|w, _| {
+            if let Some(w) = w.downcast_ref::<gtk::Window>() {
+                w.close();
+            }
+            glib::Propagation::Stop
+        })),
+    ));
+    win.add_controller(esc);
+
     win.present();
 }
 

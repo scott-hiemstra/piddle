@@ -10,6 +10,9 @@ the release notes on GitHub, and a release fails if its section is missing.
   are visible without hunting for them. If you collapse it, PIDdle
   remembers that (in `~/.local/state/piddle/`) until you expand it again.
 
+### Added
+- Escape closes the GUI details window.
+
 ### Fixed
 - The logs pane's expand arrow was invisible on the dark theme, so the
   *LOGS* heading didn't look clickable. It now shows, and highlights on

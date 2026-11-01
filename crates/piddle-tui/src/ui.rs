@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use piddle_core::actions::{exe_path, fmt_age, state_name};
 use piddle_core::encode::{cpu_color, fmt_bytes, fmt_cpu, fmt_rate};
+use piddle_core::logs;
 use piddle_core::net;
 use piddle_core::service::ServiceKind;
 use ratatui::Frame;
@@ -74,6 +75,7 @@ pub fn draw(f: &mut Frame, app: &mut App, pal: &Palette) {
     match &app.mode {
         Mode::Details => draw_details(f, app, pal),
         Mode::Confirm(_) | Mode::ConfirmTyped(..) => draw_confirm(f, app, pal),
+        Mode::Logs => draw_logs(f, app, pal),
         Mode::Help => draw_help(f, pal),
         _ => {}
     }
@@ -447,11 +449,87 @@ fn draw_details(f: &mut Frame, app: &App, pal: &Palette) {
             txt(" terminate   "),
             key("x"),
             txt(" force kill   "),
+            key("l"),
+            txt(" logs   "),
             key("Esc"),
             txt(" close"),
         ])),
         keys,
     );
+}
+
+fn draw_logs(f: &mut Frame, app: &App, pal: &Palette) {
+    let Some(v) = &app.logs else { return };
+    let full = f.area();
+    let area = popup(full, full.width.saturating_sub(4).max(40), full.height.saturating_sub(2).max(10));
+    f.render_widget(Clear, area);
+    let title = format!("Logs · {}", v.name);
+    let block = popup_block(&title, pal.fix(ACCENT), pal);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let notice_h = v.notice.as_ref().map_or(0, |n| (n.chars().count() as u16).div_ceil(inner.width.max(1)) + 1);
+    let [cmd, notice, body, keys] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(notice_h),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    f.render_widget(Paragraph::new(Span::styled(format!(" {}", v.command), Style::new().fg(pal.fix(DIM)))), cmd);
+    if let Some(n) = &v.notice {
+        f.render_widget(
+            Paragraph::new(Span::styled(n.as_str(), Style::new().fg(pal.fix(ACCENT)))).wrap(Wrap { trim: true }),
+            notice,
+        );
+    }
+
+    let h = body.height as usize;
+    let end = v.lines.len().saturating_sub(v.scroll);
+    let start = end.saturating_sub(h);
+    let lines: Vec<Line> = v
+        .lines
+        .range(start..end)
+        .map(|e| {
+            let msg_style = match e.priority {
+                0..=2 => Style::new().fg(pal.fix(Color::Rgb(255, 107, 107))).add_modifier(Modifier::BOLD),
+                3 => Style::new().fg(pal.fix(Color::Rgb(255, 138, 128))),
+                4 => Style::new().fg(pal.fix(ACCENT)),
+                5 => Style::new().add_modifier(Modifier::BOLD),
+                7 => Style::new().fg(pal.fix(DIM)),
+                _ => Style::new(),
+            };
+            let who = match e.pid {
+                Some(p) => format!("{}[{p}] ", e.ident),
+                None if e.ident.is_empty() => String::new(),
+                None => format!("{} ", e.ident),
+            };
+            Line::from(vec![
+                Span::styled(format!(" {} ", logs::fmt_clock(e.time_us)), Style::new().fg(pal.fix(DIM))),
+                Span::styled(who, Style::new().fg(pal.fix(Color::Rgb(143, 163, 200)))),
+                Span::styled(e.message.as_str(), msg_style),
+            ])
+        })
+        .collect();
+    if lines.is_empty() && v.notice.is_none() {
+        f.render_widget(Paragraph::new(Span::styled(" no entries yet", Style::new().fg(pal.fix(DIM)))), body);
+    } else {
+        f.render_widget(Paragraph::new(lines), body);
+    }
+
+    let key = |k: &'static str| Span::styled(k, Style::new().fg(pal.fix(ACCENT)).add_modifier(Modifier::BOLD));
+    let txt = |t: String| Span::styled(t, Style::new().fg(pal.fix(DIM)));
+    let mut hint = vec![key(" ↑↓ PgUp PgDn"), txt(" scroll  ".into()), key("End"), txt(" follow  ".into())];
+    if v.per_pid.is_some() {
+        hint.push(key("o"));
+        hint.push(txt(if v.pid_only { " whole service  ".into() } else { " this process only  ".into() }));
+    }
+    hint.push(key("Esc"));
+    hint.push(txt(" back".into()));
+    if v.scroll > 0 {
+        hint.push(txt(format!("   ⏸ {} newer below", v.scroll)));
+    }
+    f.render_widget(Paragraph::new(Line::from(hint)), keys);
 }
 
 fn draw_confirm(f: &mut Frame, app: &App, pal: &Palette) {
@@ -535,7 +613,7 @@ fn draw_help(f: &mut Frame, pal: &Palette) {
         ("↑ ↓ PgUp PgDn Home End", "move"),
         ("Enter", "details (or collapse a group)"),
         ("Space", "collapse / expand group or tree branch"),
-        ("/", "search name, command or PID; Esc clears"),
+        ("/", "search name, command, service or PID; Esc clears"),
         ("v or 1–5", "view: list, by application, by service, by parent, tree"),
         ("s", "sort: CPU, memory, disk I/O, PID, name"),
         ("i", "show / hide disk I/O columns"),
@@ -545,6 +623,7 @@ fn draw_help(f: &mut Frame, pal: &Palette) {
         ("p", "pause / resume"),
         ("t", "terminate (SIGTERM)"),
         ("x", "force kill (SIGKILL)"),
+        ("l (in details)", "journal logs (o: this process only)"),
         ("q, Ctrl+C", "quit"),
     ];
     let mut lines: Vec<Line> = rows

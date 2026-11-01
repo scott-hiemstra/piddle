@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use piddle_core::actions::{Assessment, Signal, assess, send_signal};
+use piddle_core::logs::{self, Entry, Query, Stream};
 use piddle_core::net::{Sockets, sockets_of};
 use piddle_core::sampler::{Control, ProcInfo, Snapshot};
 use piddle_core::service::ServiceKind;
@@ -106,7 +107,67 @@ pub enum Mode {
     Confirm(Pending),
     /// Critical process: the name must be typed.
     ConfirmTyped(Pending, String),
+    /// Journal of the details process's service (opened from Details).
+    Logs,
     Help,
+}
+
+/// Lines kept in the logs view.
+const MAX_LOG_LINES: usize = 5000;
+
+pub struct LogView {
+    pub name: String,
+    service: Query,
+    pub per_pid: Option<Query>,
+    pub pid_only: bool,
+    pub command: String,
+    pub lines: VecDeque<Entry>,
+    /// Shown above the lines: missing permissions, journalctl errors.
+    pub notice: Option<String>,
+    /// Lines scrolled up from the bottom; 0 follows new entries.
+    pub scroll: usize,
+    stream: Option<Stream>,
+}
+
+impl LogView {
+    fn start(&mut self) {
+        self.stream = None;
+        self.lines.clear();
+        self.scroll = 0;
+        let q = match (&self.per_pid, self.pid_only) {
+            (Some(p), true) => p,
+            _ => &self.service,
+        };
+        self.command = q.command_line();
+        self.notice = logs::hidden_by_permissions(q).then(|| logs::NO_SYSTEM_JOURNAL.to_string());
+        match logs::follow(q) {
+            Ok(s) => self.stream = Some(s),
+            Err(why) => self.notice = Some(why),
+        }
+    }
+
+    /// Take queued entries; true if anything changed.
+    fn poll(&mut self) -> bool {
+        let Some(s) = &self.stream else { return false };
+        let mut changed = false;
+        while let Ok(ev) = s.rx.try_recv() {
+            changed = true;
+            match ev {
+                logs::Event::Entry(e) => {
+                    if self.lines.len() == MAX_LOG_LINES {
+                        self.lines.pop_front();
+                    }
+                    self.lines.push_back(e);
+                    // Keep the view still while scrolled up.
+                    if self.scroll > 0 {
+                        self.scroll += 1;
+                    }
+                }
+                logs::Event::Ended(why) => self.notice = Some(format!("journalctl stopped: {why}")),
+            }
+        }
+        changed
+    }
 }
 
 pub struct Pending {
@@ -130,6 +191,7 @@ pub struct App {
     pub status: Option<(String, Instant)>,
     pub history: VecDeque<f32>,
     pub max_rss: u64,
+    pub logs: Option<LogView>,
     selected_pid: Option<i32>,
     history_pid: Option<i32>,
     /// Sockets of the process in the details popup, with when they were read.
@@ -155,6 +217,7 @@ impl App {
             active_only: false,
             paused: false,
             table: TableState::default().with_selected(Some(0)),
+            logs: None,
             mode: Mode::Normal,
             status: None,
             history: VecDeque::with_capacity(HISTORY),
@@ -424,6 +487,60 @@ impl App {
         }
     }
 
+    fn open_logs(&mut self) {
+        self.mode = Mode::Details;
+        let Some(p) = self.detail_proc() else { return };
+        let Some(service) = Query::for_process(p, false) else {
+            self.set_status("Kernel threads don't write to the journal (see journalctl -k).");
+            return;
+        };
+        let per_pid = Query::for_process(p, true).filter(|_| service.is_service());
+        let mut v = LogView {
+            name: format!("{} ({})", p.name, p.pid),
+            service,
+            per_pid,
+            pid_only: false,
+            command: String::new(),
+            lines: VecDeque::new(),
+            notice: None,
+            scroll: 0,
+            stream: None,
+        };
+        v.start();
+        self.logs = Some(v);
+        self.mode = Mode::Logs;
+    }
+
+    /// Called from the main loop; true when the logs view needs a redraw.
+    pub fn poll_logs(&mut self) -> bool {
+        self.logs.as_mut().is_some_and(LogView::poll)
+    }
+
+    fn on_logs_key(&mut self, key: KeyEvent) {
+        self.mode = Mode::Logs;
+        let Some(v) = self.logs.as_mut() else { return };
+        let max = v.lines.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('l') => {
+                // Dropping the view stops journalctl.
+                self.logs = None;
+                self.mode = Mode::Details;
+            }
+            KeyCode::Char('q') => self.quit = true,
+            KeyCode::Char('o') if v.per_pid.is_some() => {
+                v.pid_only = !v.pid_only;
+                v.start();
+            }
+            KeyCode::Up | KeyCode::Char('k') => v.scroll = (v.scroll + 1).min(max),
+            KeyCode::Down | KeyCode::Char('j') => v.scroll = v.scroll.saturating_sub(1),
+            KeyCode::PageUp => v.scroll = (v.scroll + 20).min(max),
+            KeyCode::PageDown => v.scroll = v.scroll.saturating_sub(20),
+            KeyCode::Home | KeyCode::Char('g') => v.scroll = max,
+            KeyCode::End | KeyCode::Char('G') => v.scroll = 0,
+            _ => {}
+        }
+    }
+
     fn request_signal(&mut self, sig: Signal) {
         let info = match self.mode {
             Mode::Details => self.detail_proc().cloned(),
@@ -491,10 +608,12 @@ impl App {
             Mode::Details => match key.code {
                 KeyCode::Char('t') => self.request_signal(Signal::Terminate),
                 KeyCode::Char('x') => self.request_signal(Signal::Kill),
+                KeyCode::Char('l') => self.open_logs(),
                 KeyCode::Char('q') => self.quit = true,
                 KeyCode::Esc | KeyCode::Enter => {}
                 _ => self.mode = Mode::Details,
             },
+            Mode::Logs => self.on_logs_key(key),
             Mode::Confirm(p) => {
                 if matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
                     self.execute(p);
@@ -701,6 +820,21 @@ mod tests {
         app.query = "ssh".into();
         app.rebuild();
         assert_eq!(names(&app), ["[ssh ×1]", "└─ sshd"]);
+    }
+
+    #[test]
+    fn logs_for_kernel_threads_explain_instead_of_opening() {
+        let mut k = proc(2, 0, "kthreadd", 0.0);
+        k.kthread = true;
+        k.service = piddle_core::service::Service::kernel();
+        let mut app = app_with(vec![k]);
+        app.show_kernel = true;
+        app.rebuild();
+        app.on_key(key(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Details));
+        app.on_key(key(KeyCode::Char('l')));
+        assert!(matches!(app.mode, Mode::Details) && app.logs.is_none());
+        assert!(app.status.as_ref().is_some_and(|(s, _)| s.contains("journalctl -k")));
     }
 
     #[test]

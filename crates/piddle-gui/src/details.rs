@@ -186,6 +186,9 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
     net_box.append(&net_scroll);
     root.append(&net_box);
 
+    // ---- journal of the process's service, streamed while expanded
+    root.append(&crate::journal::pane(&info));
+
     // ---- risk banner, shown for blocked or critical processes
     let risk = gtk::Label::builder().xalign(0.0).wrap(true).width_chars(40).max_width_chars(70).visible(false).build();
     risk.add_css_class("risk-banner");

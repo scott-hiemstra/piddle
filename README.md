@@ -43,13 +43,14 @@ Hover a bubble for CPU, memory and thread count. Click it to open the details wi
 - Five layouts:
   - **Free**: one packed cloud.
   - **By application**: processes clustered by executable, for example all `chrome` processes. Each cluster shows its count, total CPU and total memory.
-  - **By service**: processes clustered by the systemd service, scope or container they run in, read from `/proc/<pid>/cgroup`. Hull colors mark the kind: system services, user services (your `systemd --user` units), scopes (login sessions and launched apps), and containers (Docker, Podman, Kubernetes, LXC, systemd-nspawn, libvirt machines). Anything else falls back to its cgroup name. Membership is re-read every few samples, so a process moved to another cgroup changes cluster.
+  - **By service**: processes clustered by the systemd service, scope or container they run in, read from `/proc/<pid>/cgroup`. Hull colors mark the kind: system services, user services (your `systemd --user` units), scopes (login sessions and launched apps), and containers (Docker, Podman, Kubernetes, LXC, systemd-nspawn, libvirt machines). OpenRC services are recognized too. Anything else falls back to its cgroup name, so the view still works without systemd. Membership is re-read every few samples, so a process moved to another cgroup changes cluster.
   - **By parent**: processes clustered by parent PID.
   - **Process tree**: a radial tree with the root in the center and one ring per generation. Parent→child links are drawn, and siblings are ordered by PID so the tree doesn't reshuffle. Every parent process gets a tag with its name, PID and child count, even when its bubble is tiny.
 - Search by name, command line, service or PID prefix. Matches are ringed and everything else is dimmed, so the layout doesn't jump around.
 - Filters: show or hide kernel threads (hidden by default), and **Active only**, which shows processes that used CPU in the last few seconds.
 - Screenshots: the camera button or **Ctrl+S** saves the canvas and sidebar as a full-resolution PNG in `~/Pictures` and copies it to the clipboard. With Ctrl+S, the hover card for the process under the mouse is included.
 - Details window with a live 60-second CPU history, CPU / memory / thread / disk I/O cards, parent, user, service and cgroup, start time, priority, executable, command line, and the process's network connections (TCP and UDP with addresses and state, plus a Unix socket count).
+- **Logs pane** in the details window: expand *Logs* to follow the journal of the process's service live, colored by priority. *This process only* narrows it to the PID, and the equivalent `journalctl` command is shown for copying. journalctl only runs while the pane is open. Reading system services' logs needs the system journal (root, or membership of `systemd-journal` or `adm`); without it the pane says so instead of showing nothing.
 - Sidebar with a color and size legend. The size references are drawn at the current zoom, so they match the bubbles on screen. Below the legend are system totals, a top-CPU list (click an entry to open its details), and PIDdle's own CPU use and per-sample cost.
 - A dark interface that stays dark and readable even when the desktop forces a light GTK color scheme, as KDE's Breeze does. PIDdle also hides the harmless `Unknown key gtk-modules` warning that KDE's GTK4 settings cause.
 
@@ -76,6 +77,7 @@ A live process list with system CPU and memory meters. Each row shows:
 - The same views: list, by application, by service, by parent, and process tree. Groups and tree branches can be collapsed.
 - Search, sorting (CPU, memory, disk I/O, PID, name), active-only and kernel-thread filters, and an adjustable sampling interval.
 - A details popup with service and cgroup, CPU history, disk I/O totals, and the process's network connections.
+- Press `l` in the details popup for the service's journal, followed live (`o` toggles this process only; ↑↓ PgUp PgDn scroll and pause following; End resumes).
 - Terminate and Force Kill with the same safety rules as the GUI.
 - Uses 24-bit color when the terminal advertises it (`COLORTERM=truecolor`), otherwise the nearest 256-color shades.
 
@@ -92,6 +94,7 @@ A live process list with system CPU and memory meters. Each row shows:
 | `+` / `-` | Sampling interval |
 | `p` | Pause / resume |
 | `t` / `x` | Terminate (SIGTERM) / force kill (SIGKILL) |
+| `l` (in details) | Journal logs for the service; `o` this process only |
 | `?` | Help |
 | `q`, Ctrl+C | Quit |
 
@@ -170,11 +173,17 @@ Remove with `apt remove`, `dnf remove` or `pacman -R` and the package names.
 
 ### Releases
 
-Pushing a version tag builds all packages on GitHub Actions and attaches them to a GitHub release:
+Pushing a version tag builds all packages on GitHub Actions and attaches them to a GitHub release. The release notes are that version's section of [CHANGELOG.md](CHANGELOG.md):
+
+1. Bump `version` in `Cargo.toml`.
+2. Give the version's `CHANGELOG.md` section a date instead of `Unreleased`.
+3. Tag and push:
 
 ```sh
-git tag v0.3.2 && git push origin v0.3.2     # tag must match the version in Cargo.toml
+git tag v0.4.0 && git push origin v0.4.0     # tag must match the version in Cargo.toml
 ```
+
+The release fails early if the tag doesn't match `Cargo.toml` or the changelog section is missing, empty, or undated. Check the notes locally with `packaging/release-notes.sh 0.4.0`.
 
 The `.deb` and `.rpm` are built on Ubuntu 24.04, natively on GitHub's x86_64 and ARM64 runners. The Arch packages are made from the same binaries in an Arch Linux container. You can also run the **Release** workflow by hand from the Actions tab; it then only builds the packages as downloadable artifacts and publishes nothing.
 
@@ -200,12 +209,14 @@ crates/
     actions.rs      risk assessment (assess), signalling via pidfd (PID-reuse guard), state names
     net.rs          a process's network connections, from /proc/<pid>/fd and /proc/<pid>/net
     service.rs      systemd service / scope / container of a process, from /proc/<pid>/cgroup
+    logs.rs         journal entries for a service or PID, streamed from journalctl
     examples/top.rs minimal plain-text example
   piddle-gui/       GTK 4 interface (binary `piddle-gui`)
     view.rs         bubble model, layouts, physics, GSK rendering
     canvas.rs       custom widget that renders the view
     legend.rs       color/size legend
     details.rs      details window, CPU history, confirm / type-to-confirm dialogs
+    journal.rs      logs pane in the details window
     screenshot.rs   capture the window contents to PNG and clipboard
     main.rs         window, header controls, sidebar, theming, wiring
   piddle-tui/       Ratatui interface (binary `piddle-tui`)

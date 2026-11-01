@@ -12,13 +12,13 @@ CPU load, and related things are grouped.
 
 ## Order
 
-1. **Service/cgroup grouping in PIDdle.** *(done on `main`, for 0.4.0)* Add a "By service" view that groups
+1. **Service/cgroup grouping in PIDdle.** *(done, for 0.4.0)* Add a "By service" view that groups
    processes by systemd unit, slice or container, read from
    `/proc/<pid>/cgroup`. It's small, and it lays groundwork for later items:
    - containers are cgroups, so a Docker/Podman view mostly falls out of it;
    - kpiddle's node view needs the same process → pod mapping;
    - the logs pane (below) needs the unit name.
-2. **Logs pane in the details view.** Show the journal for the selected
+2. **Logs pane in the details view.** *(done, for 0.4.0)* Show the journal for the selected
    process's unit (or `_PID` for processes outside a unit). It appears as a
    tail in the details window/popup, following live.
    - Implemented by spawning `journalctl -o json`, not by linking libsystemd,

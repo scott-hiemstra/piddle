@@ -71,6 +71,7 @@ fn main() -> std::io::Result<()> {
                 app.apply(snap);
                 dirty = true;
             }
+            dirty |= app.poll_logs();
             // Repaint once more when a status message expires.
             let status_live = app.status.as_ref().map(|(_, at)| at.elapsed() < Duration::from_secs(4));
             if status_live != last_status {

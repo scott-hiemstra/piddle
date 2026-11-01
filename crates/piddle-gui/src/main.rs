@@ -1,5 +1,6 @@
 mod canvas;
 mod details;
+mod journal;
 mod legend;
 mod screenshot;
 mod view;
@@ -134,6 +135,9 @@ window.details, .details { background: #0f1218; color: #e6e9ef; }
 .info-val { color: #e6e9ef; }
 .cmdline-box { background: #0a0c11; border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; }
 .cmdline { font-family: monospace; font-size: 11.5px; color: #c9d4e5; padding: 8px 10px; }
+.mono { font-family: monospace; }
+expander-widget > box > title > arrow { color: rgba(158,173,204,0.9); }
+textview.journal, textview.journal text { background: transparent; color: #c9d4e5; font-size: 11.5px; }
 .details-status { color: rgba(200,210,230,0.7); font-size: 12px; }
 button.action { background: #1d222c; color: #e6e9ef; border: 1px solid rgba(255,255,255,0.12); border-radius: 8px;
   padding: 6px 16px; box-shadow: none; margin: 0; }

@@ -8,6 +8,7 @@
 //!   [`sampler::Sampler`] or on a background thread via [`sampler::spawn`].
 //! * [`encode`] — CPU → color and memory → size mappings plus formatting.
 //! * [`actions`] — signalling processes safely, state descriptions.
+//! * [`logs`] — journal entries for a process's service, via journalctl.
 //! * [`net`] — a process's network connections, looked up on demand.
 //! * [`service`] — which systemd service, scope or container a process is in.
 //! * [`GUI_UNAVAILABLE`] — exit code contract between `piddle-gui` and the
@@ -15,6 +16,7 @@
 
 pub mod actions;
 pub mod encode;
+pub mod logs;
 pub mod net;
 pub mod sampler;
 pub mod service;

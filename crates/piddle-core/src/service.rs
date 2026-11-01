@@ -108,7 +108,7 @@ pub fn cgroup_path(contents: &str) -> Option<&str> {
         if id == "0" && ctrl.is_empty() {
             return Some(path);
         }
-        if ctrl == "name=systemd" {
+        if ctrl == "name=systemd" || ctrl == "name=openrc" {
             named = Some(path);
         }
         first.get_or_insert(path);
@@ -153,6 +153,21 @@ pub fn classify(path: &str, users: &HashMap<u32, Arc<str>>, viewer_uid: u32) -> 
         if c.ends_with(".service") || c.ends_with(".scope") {
             last_unit = Some(i);
         }
+    }
+
+    // OpenRC (Alpine, Gentoo, Artix) puts each service in /openrc.<name>.
+    if let Some(name) = comps.first().and_then(|c| c.strip_prefix("openrc.")) {
+        let label = sanitize(name);
+        return Service {
+            kind: ServiceKind::System,
+            key: sanitize(&prefix(0)).into(),
+            search: label.to_lowercase().into(),
+            label: label.into(),
+            unit: None,
+            user_unit: false,
+            uid,
+            path: path_clean.into(),
+        };
     }
 
     let Some(i) = last_unit else {
@@ -381,6 +396,13 @@ mod tests {
         assert_eq!(&*c("/machine.slice/machine-qemu\\x2d1\\x2dwin11.scope").label, "machine qemu-1-win11");
         // The daemons themselves are ordinary services.
         assert_eq!(c("/system.slice/docker.service").kind, ServiceKind::System);
+    }
+
+    #[test]
+    fn openrc_services() {
+        let s = c("/openrc.sshd");
+        assert_eq!((s.kind, &*s.label, s.unit.as_deref()), (ServiceKind::System, "sshd", None));
+        assert_eq!(cgroup_path("2:cpu:/x\n1:name=openrc:/openrc.crond\n"), Some("/openrc.crond"));
     }
 
     #[test]

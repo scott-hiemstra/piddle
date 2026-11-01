@@ -5,7 +5,7 @@ CPU load, and related things are grouped.
 
 | Tool       | Scope                               | Status                          |
 |------------|-------------------------------------|---------------------------------|
-| PIDdle     | one machine (GUI + TUI)             | released, 0.4.2                 |
+| PIDdle     | one machine (GUI + TUI)             | released, 0.4.3                 |
 | kpiddle    | a Kubernetes cluster                | TUI + GUI read-only, in its own repo |
 | recording  | record and play back, for all three | planned                         |
 | piddle-mcp | read-only access for AI agents      | planned                         |
@@ -51,7 +51,7 @@ detailed plans live in their repos.
 
 ## Done
 
-- **Repo split.** kpiddle and piddle-net moved to their own repos, and the
+- **0.4.3: repo split.** kpiddle and piddle-net moved to their own repos, and the
   code they share with PIDdle (bubble scene, encodings, GTK canvas) to
   piddle-common.
 - **0.4.0: service grouping.** A "By service" view groups processes by

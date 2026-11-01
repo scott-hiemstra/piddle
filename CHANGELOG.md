@@ -3,7 +3,7 @@
 Notable changes in each release. The section for a version is published as
 the release notes on GitHub, and a release fails if its section is missing.
 
-## [Unreleased]
+## [0.4.3] - 2026-11-01
 
 ### Changed
 - Code shared with kpiddle moved to the new
@@ -138,6 +138,7 @@ the release notes on GitHub, and a release fails if its section is missing.
 - Screenshots.
 - `.deb`, `.rpm` and Arch packages, built by GitHub Actions.
 
+[0.4.3]: https://github.com/scott-hiemstra/piddle/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/scott-hiemstra/piddle/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/scott-hiemstra/piddle/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/scott-hiemstra/piddle/compare/v0.3.2...v0.4.0

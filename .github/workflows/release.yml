@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Check tag matches Cargo.toml version
+      - name: Check tag matches Cargo.toml version and has release notes
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
@@ -37,6 +37,10 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
             exit 1
           fi
+          packaging/release-notes.sh "$version" > /dev/null || {
+            echo "::error::CHANGELOG.md needs a dated section for $version"
+            exit 1
+          }
 
       - name: Install build tools
         run: |
@@ -121,6 +125,8 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: piddle-deb-rpm-*
@@ -138,8 +144,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -la dist dist/debian dist/rpm
+          # Notes come from CHANGELOG.md; --generate-notes appends the compare link.
+          packaging/release-notes.sh "${GITHUB_REF_NAME#v}" > notes.md
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "PIDdle $GITHUB_REF_NAME" \
+            --notes-file notes.md \
             --generate-notes \
             dist/debian/*.deb dist/rpm/*.rpm dist/*.pkg.tar.zst

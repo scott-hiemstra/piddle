@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Print the CHANGELOG.md section for a version, for use as release notes.
+# Print the CHANGELOG.md section for a version, for use as release notes,
+# with hard-wrapped lines joined.
 # Fails if the section is missing, empty, or still marked Unreleased, so a
 # release can't go out without notes.
 #   packaging/release-notes.sh 0.4.0 > notes.md
@@ -26,4 +27,15 @@ if [ -z "${notes//[[:space:]]/}" ]; then
   echo "error: CHANGELOG.md section for $version is empty" >&2
   exit 1
 fi
-printf '%s\n' "$notes"
+# GitHub renders every newline in release notes as a line break, so join
+# hard-wrapped lines back into their paragraph or list item. Headings, list
+# items, blank lines and code blocks keep their own lines.
+printf '%s\n' "$notes" | awk '
+  function flush() { if (buf != "") print buf; buf = "" }
+  /^```/ { flush(); print; code = !code; next }
+  code { print; next }
+  /^[[:space:]]*$/ { flush(); print; next }
+  /^#/ || /^[[:space:]]*([-*+]|[0-9]+\.)[[:space:]]/ { flush(); buf = $0; next }
+  { line = $0; sub(/^[[:space:]]+/, "", line); buf = (buf == "") ? line : buf " " line }
+  END { flush() }
+'

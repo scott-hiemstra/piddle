@@ -8,7 +8,7 @@ CPU load, and related things are grouped.
 | PIDdle     | one machine (GUI + TUI)             | released, 0.4.2                 |
 | kpiddle    | a Kubernetes cluster                | next; design on `kpiddle` branch |
 | recording  | record and play back, for all three | planned                         |
-| piddle-mcp | read-only access for Rook (Claude)  | planned                         |
+| piddle-mcp | read-only access for AI agents      | planned                         |
 | piddle-net | remote machines via agents          | design on `piddle-net` branch   |
 
 ## Up next
@@ -35,8 +35,8 @@ CPU load, and related things are grouped.
    - Live streams never drop deltas. A slow viewer gets a delta computed from
      its own last-known state, or a fresh full snapshot.
 3. **piddle-mcp.** A read-only MCP server exposing the current snapshot,
-   history and the selected process or workload, so Rook (Claude) can
-   investigate the same thing you are looking at. No actions.
+   history and the selected process or workload. Any MCP-capable agent or
+   client can then investigate the same thing you are looking at. No actions.
 4. **piddle-net.** Agents, the directory/key server, and client-bound tokens.
    See `docs/piddle-net/DESIGN.md` on the `piddle-net` branch.
 

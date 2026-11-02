@@ -28,7 +28,8 @@ $DESC_CORE
 
 %package gui
 Summary:        $SUMMARY_GUI
-Requires:       piddle = %{version}-%{release}
+# Only the launcher uses the GUI, so piddle-gui installs on its own.
+Recommends:     piddle = %{version}-%{release}
 # 0.1.0's piddle package was the GUI; keep it installed across the upgrade.
 Obsoletes:      piddle < 0.2.0
 

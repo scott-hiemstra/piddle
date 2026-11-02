@@ -2,7 +2,9 @@
 #
 # Two packages are produced per format and architecture:
 #   piddle      launcher (`piddle`) + terminal UI (`piddle-tui`); no GTK, fine for servers
-#   piddle-gui  graphical UI (`piddle-gui`) + desktop entry; depends on piddle
+#   piddle-gui  graphical UI (`piddle-gui`) + desktop entry; recommends piddle
+#               (only the launcher uses the GUI, not the other way round, so
+#               piddle-gui installs and runs on its own)
 set -euo pipefail
 
 # Target architecture: PIDDLE_ARCH (x86_64 or aarch64), default the host's.

@@ -1,0 +1,144 @@
+name: Package repository
+
+# Publish signed apt, dnf and pacman repositories for one release's packages
+# on GitHub Pages (https://scott-hiemstra.github.io/piddle), with an index
+# page explaining the setup. The Release workflow calls this after
+# publishing; run it by hand to republish the latest release (or a given
+# tag).
+#
+# Needs the PACKAGES_GPG_KEY secret (the armored private key matching
+# packaging/signing-key.asc), Pages set to deploy from GitHub Actions, and
+# the github-pages environment allowing v* tags as well as main.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (empty for the latest release)
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+    secrets:
+      PACKAGES_GPG_KEY:
+        required: true
+
+# Every action is pinned to a full commit SHA (version in the comment) so a
+# moved tag can't change what builds the release; Dependabot proposes updates.
+permissions:
+  contents: read
+
+# One deployment at a time; a newer one waits rather than cancelling.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  apt-dnf:
+    name: apt and dnf repositories
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the release's packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          [ -n "$TAG" ] || TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          echo "Publishing $TAG"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir pkgs \
+            --pattern '*.deb' --pattern '*.rpm' --pattern '*.pkg.tar.zst'
+          ls -la pkgs
+
+      - name: Install repository tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends apt-utils createrepo-c rpm gnupg
+
+      - name: Import the signing key
+        env:
+          KEY: ${{ secrets.PACKAGES_GPG_KEY }}
+        run: |
+          [ -n "$KEY" ] || { echo "::error::The PACKAGES_GPG_KEY secret is not set"; exit 1; }
+          printf '%s\n' "$KEY" | gpg --batch --import
+
+      - name: Build the site
+        run: packaging/build-site.sh pkgs site
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site-apt-dnf
+          path: site
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: arch-packages
+          path: pkgs/*.pkg.tar.zst
+          if-no-files-found: error
+
+  pacman:
+    name: pacman repositories
+    needs: apt-dnf
+    runs-on: ubuntu-24.04
+    # repo-add comes with pacman, so build the Arch repositories on Arch.
+    container: archlinux:latest
+    steps:
+      - name: Install tools
+        run: pacman -Syu --noconfirm --needed gnupg
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: arch-packages
+          path: pkgs
+
+      - name: Import the signing key
+        env:
+          KEY: ${{ secrets.PACKAGES_GPG_KEY }}
+        run: printf '%s\n' "$KEY" | gpg --batch --import
+
+      - name: Build the pacman repositories
+        run: packaging/build-site-arch.sh pkgs site
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: site-pacman
+          path: site
+          if-no-files-found: error
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: [apt-dnf, pacman]
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: site-*
+          path: site
+          merge-multiple: true
+
+      - name: Check the site
+        run: |
+          for f in index.html key.asc deb/InRelease rpm/repodata/repomd.xml.asc \
+            arch/x86_64/piddle.db.sig arch/aarch64/piddle.db.sig; do
+            [ -s "site/$f" ] || { echo "::error::site/$f is missing"; exit 1; }
+          done
+          find site -type f | sort
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

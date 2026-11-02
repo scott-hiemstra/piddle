@@ -3,6 +3,21 @@
 Notable changes in each release. The section for a version is published as
 the release notes on GitHub, and a release fails if its section is missing.
 
+## [Unreleased]
+
+### Changed
+- The `piddle-gui` package installs on its own: it recommends `piddle`
+  instead of requiring it, since only the `piddle` launcher uses the GUI.
+  Installing just the downloaded `piddle-gui` .deb, .rpm or Arch package
+  used to fail until `piddle` was installed first.
+
+### Added
+- A signed package repository on GitHub Pages,
+  <https://scott-hiemstra.github.io/piddle/>, for apt (Debian, Ubuntu), dnf
+  (Fedora, RHEL, openSUSE) and pacman (Arch), on x86_64 and ARM64. Once it
+  is added, installing `piddle-gui` brings `piddle` along and updates come
+  with system updates. Each release updates it.
+
 ## [0.4.3] - 2026-11-01
 
 ### Changed

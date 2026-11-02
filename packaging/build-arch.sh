@@ -37,7 +37,9 @@ package_piddle() {
 
 package_piddle-gui() {
   pkgdesc="$SUMMARY_GUI"
-  depends=("piddle=\$pkgver" 'gtk4>=4.14' 'glib2' 'cairo' 'pango' 'graphene' 'glibc' 'gcc-libs')
+  # Only the launcher uses the GUI, so piddle-gui installs on its own.
+  depends=('gtk4>=4.14' 'glib2' 'cairo' 'pango' 'graphene' 'glibc' 'gcc-libs')
+  optdepends=('piddle: the piddle launcher and terminal interface')
   install -Dm755 piddle-gui "\$pkgdir/usr/bin/piddle-gui"
   install -Dm644 io.github.piddle.desktop "\$pkgdir/usr/share/applications/io.github.piddle.desktop"
   install -Dm644 LICENSE "\$pkgdir/usr/share/licenses/piddle-gui/LICENSE"

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@NAME@ packages</title>
+<style>
+  :root { --bg: #ffffff; --fg: #1d2330; --dim: #5b6475; --code-bg: #f3f5f9; --border: #dde2ea; --accent: #b8860b; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1218; --fg: #e6e9ef; --dim: #9aa5b8; --code-bg: #161a22; --border: #262c38; --accent: #f2c94c; }
+  }
+  body { background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, sans-serif; margin: 0; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  h1 span { color: var(--accent); }
+  h2 { font-size: 19px; margin: 32px 0 8px; }
+  p, li { color: var(--fg); }
+  .dim { color: var(--dim); }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
+        overflow-x: auto; font-size: 13.5px; line-height: 1.5; }
+  code { font-family: ui-monospace, "DejaVu Sans Mono", monospace; }
+  p code, li code { background: var(--code-bg); border-radius: 4px; padding: 1px 5px; font-size: 14px; }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+<h1><span>@NAME@</span> packages</h1>
+<p class="dim">Version @VERSION@ for x86_64 and ARM64 Linux, signed with key
+<code>@FPR_SPACED@</code> (<a href="key.asc">key.asc</a>).</p>
+
+<p>Add the repository once, and then <code>@GUI@</code> brings what it needs along, and updates arrive
+with your normal system updates. On a server, install just <code>@NAME@</code>.
+Release notes and the individual files are on
+<a href="https://github.com/scott-hiemstra/@NAME@/releases">GitHub</a>.</p>
+
+<h2>Debian, Ubuntu</h2>
+<pre><code>sudo install -d /etc/apt/keyrings
+curl -fsSL @URL@/key.asc | sudo tee /etc/apt/keyrings/@NAME@.asc &gt;/dev/null
+echo "deb [signed-by=/etc/apt/keyrings/@NAME@.asc] @URL@/deb ./" | sudo tee /etc/apt/sources.list.d/@NAME@.list
+sudo apt update
+sudo apt install @NAME@ @GUI@</code></pre>
+
+<h2>Fedora, RHEL, openSUSE</h2>
+<pre><code>sudo curl -fsSLo /etc/yum.repos.d/@NAME@.repo @URL@/rpm/@NAME@.repo
+sudo dnf install @NAME@ @GUI@</code></pre>
+<p class="dim">dnf asks you to confirm the key on first use; check that its fingerprint is the one above.
+On openSUSE, use <code>sudo zypper addrepo @URL@/rpm/@NAME@.repo</code> and <code>zypper install</code>.</p>
+
+<h2>Arch Linux</h2>
+<pre><code>curl -fsSL @URL@/key.asc | sudo pacman-key --add -
+sudo pacman-key --lsign-key @FPR@
+printf '\n[@NAME@]\nServer = @URL@/arch/$arch\n' | sudo tee -a /etc/pacman.conf
+sudo pacman -Syu @NAME@ @GUI@</code></pre>
+</main>
+</body>
+</html>

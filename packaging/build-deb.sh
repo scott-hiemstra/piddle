@@ -18,10 +18,10 @@ shlibdeps() {
   rm -rf "$work"
 }
 
-# build_deb <package> <summary> <description> <extra depends> <extra fields> <file entries...>
+# build_deb <package> <summary> <description> <extra fields> <file entries...>
 build_deb() {
-  local pkg=$1 summary=$2 desc=$3 extra_depends=$4 extra=$5
-  shift 5
+  local pkg=$1 summary=$2 desc=$3 extra=$4
+  shift 4
   local root="$out/${pkg}_${VERSION}_${arch}"
   rm -rf "$root"
   stage_files "$root" "$@"
@@ -29,10 +29,9 @@ build_deb() {
 
   local bins=()
   for f in "$root"/usr/bin/*; do bins+=("$PWD/$f"); done
-  # Static binaries have no library dependencies; join what remains.
+  # Static binaries have no library dependencies, so this is empty for piddle.
   local depends
-  depends=$(shlibdeps "${bins[@]}")
-  depends=$(printf '%s\n' "$depends" "$extra_depends" | sed '/^$/d' | paste -sd, - | sed 's/,/, /g')
+  depends=$(shlibdeps "${bins[@]}" | sed 's/,/, /g')
 
   mkdir -p "$root/DEBIAN"
   {
@@ -55,9 +54,12 @@ build_deb() {
   echo "$out/${pkg}_${VERSION}_${arch}.deb"
 }
 
-build_deb piddle "$SUMMARY_CORE" "$DESC_CORE" "" "" "${CORE_FILES[@]}"
+build_deb piddle "$SUMMARY_CORE" "$DESC_CORE" "Suggests: piddle-gui" "${CORE_FILES[@]}"
+# piddle-gui doesn't need piddle (only the launcher uses the GUI), so it only
+# recommends it: `apt install ./piddle-gui_*.deb` works on its own.
 # 0.1.0's piddle package shipped the GUI and its desktop entry.
-build_deb piddle-gui "$SUMMARY_GUI" "$DESC_GUI" "piddle (= $VERSION)" \
-  "Replaces: piddle (<< 0.2.0)
+build_deb piddle-gui "$SUMMARY_GUI" "$DESC_GUI" \
+  "Recommends: piddle (= $VERSION)
+Replaces: piddle (<< 0.2.0)
 Breaks: piddle (<< 0.2.0)" \
   "${GUI_FILES[@]}"

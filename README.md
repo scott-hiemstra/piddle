@@ -133,16 +133,22 @@ You can only signal other users' processes when PIDdle runs with the right privi
 
 ## Install
 
-**[Download the latest release](https://github.com/scott-hiemstra/piddle/releases/latest)**: packages for Debian/Ubuntu (`.deb`), Fedora/RHEL/openSUSE (`.rpm`) and Arch Linux, for x86_64 and ARM64.
+**[Add the package repository](https://scott-hiemstra.github.io/piddle/)** for Debian/Ubuntu, Fedora/RHEL/openSUSE or Arch Linux, on x86_64 or ARM64. You set it up once with a few commands; then `piddle-gui` brings `piddle` along, and updates arrive with your normal system updates. The repository and its packages are signed with this key:
+
+```
+CDC7 835A 1155 6B6D BD74  08E0 D4E5 629D 1E38 47D0   PIDdle packages <scott@hiemstra.us>
+```
+
+Or **[download the latest release](https://github.com/scott-hiemstra/piddle/releases/latest)** and install the files directly, as below.
 
 There are two packages:
 
 | Package | Contains | Dependencies |
 |---|---|---|
 | `piddle` | `piddle` launcher, `piddle-tui` | none (static binaries); works on any Linux of its architecture |
-| `piddle-gui` | `piddle-gui`, app-menu entry | GTK 4.14+, glibc 2.34+, `piddle` |
+| `piddle-gui` | `piddle-gui`, app-menu entry | GTK 4.14+, glibc 2.39+ (`piddle` is recommended, not required) |
 
-On a server, download and install `piddle`. On a desktop, install both. Then install the downloaded files:
+On a server, install `piddle`. On a desktop, install both; `piddle-gui` alone also works, without the `piddle` launcher command. Downloaded files must be installed together in one command, since the package manager can only fetch dependencies from a repository:
 
 | Distribution | Install (x86_64 file names; ARM64 uses `arm64` / `aarch64`) |
 |---|---|
@@ -186,6 +192,8 @@ git tag v0.4.0 && git push origin v0.4.0     # tag must match the version in Car
 ```
 
 The release fails early if the tag doesn't match `Cargo.toml` or the changelog section is missing, empty, or undated. Check the notes locally with `packaging/release-notes.sh 0.4.0`.
+
+After publishing, the release workflow updates the [package repository](https://scott-hiemstra.github.io/piddle/) on GitHub Pages (`.github/workflows/pages.yml`, which can also be run by hand to republish). It signs the RPMs and the apt, dnf and pacman metadata with the key above, which the `PACKAGES_GPG_KEY` secret holds; `packaging/build-site.sh` and `packaging/build-site-arch.sh` build the site. The repository carries the latest release only; older versions stay on the releases page.
 
 The `.deb` and `.rpm` are built on Ubuntu 24.04, natively on GitHub's x86_64 and ARM64 runners. The Arch packages are made from the same binaries in an Arch Linux container. You can also run the **Release** workflow by hand from the Actions tab; it then only builds the packages as downloadable artifacts and publishes nothing.
 

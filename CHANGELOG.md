@@ -3,13 +3,16 @@
 Notable changes in each release. The section for a version is published as
 the release notes on GitHub, and a release fails if its section is missing.
 
-## [Unreleased]
+## [0.4.4] - 2026-11-01
 
-### Changed
-- The `piddle-gui` package installs on its own: it recommends `piddle`
-  instead of requiring it, since only the `piddle` launcher uses the GUI.
-  Installing just the downloaded `piddle-gui` .deb, .rpm or Arch package
-  used to fail until `piddle` was installed first.
+Easier to install and keep up to date: a signed package repository, and
+`piddle-gui` no longer needs `piddle` installed first. Plus a clear message
+when `/proc` is missing, and a README section on why PIDdle can see only
+part of the system.
+
+![The process details window, with CPU history and actions](https://raw.githubusercontent.com/scott-hiemstra/piddle/v0.4.4/docs/screenshots/gui-details.png)
+
+![Stopping a critical process needs its name typed](https://raw.githubusercontent.com/scott-hiemstra/piddle/v0.4.4/docs/screenshots/gui-confirm.png)
 
 ### Added
 - A signed package repository on GitHub Pages,
@@ -17,6 +20,26 @@ the release notes on GitHub, and a release fails if its section is missing.
   (Fedora, RHEL, openSUSE) and pacman (Arch), on x86_64 and ARM64. Once it
   is added, installing `piddle-gui` brings `piddle` along and updates come
   with system updates. Each release updates it.
+- `piddle-tui` and `piddle-gui` exit with an explanation when `/proc` isn't
+  mounted (a chroot or rescue shell), instead of showing an empty view.
+- `piddle-gui --version` and `--help`, which work without a display.
+- README: "When PIDdle sees only part of the system" covers `hidepid`,
+  containers and sandboxes.
+
+### Changed
+- The `piddle-gui` package installs on its own: it recommends `piddle`
+  instead of requiring it, since only the `piddle` launcher uses the GUI.
+  Installing just the downloaded `piddle-gui` .deb, .rpm or Arch package
+  used to fail until `piddle` was installed first.
+- The details window's building blocks and the type-the-name confirmation
+  now come from piddle-common 0.1.1 (`piddle_gtk::details`), shared with
+  kpiddle. No visible change.
+- `scripts/use-local-common.sh off` restores Cargo.lock to the pinned
+  piddle-common commit.
+
+### Fixed
+- The README gave glibc 2.34 as `piddle-gui`'s minimum; the packages need
+  2.39.
 
 ## [0.4.3] - 2026-11-01
 

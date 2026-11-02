@@ -5,8 +5,8 @@ CPU load, and related things are grouped.
 
 | Tool       | Scope                               | Status                          |
 |------------|-------------------------------------|---------------------------------|
-| PIDdle     | one machine (GUI + TUI)             | released, 0.4.3                 |
-| kpiddle    | a Kubernetes cluster                | TUI + GUI read-only, in its own repo |
+| PIDdle     | one machine (GUI + TUI)             | released, 0.4.4                 |
+| kpiddle    | a Kubernetes cluster                | released, 0.2.0, in its own repo |
 | recording  | record and play back, for all three | planned                         |
 | piddle-mcp | read-only access for AI agents      | planned                         |
 | piddle-net | remote machines via agents          | design, in its own repo         |
@@ -17,10 +17,10 @@ detailed plans live in their repos.
 
 ## Up next
 
-1. **kpiddle.** The read-only TUI and GUI are built (pods with CPU and
-   memory from metrics-server, where missing or stale metrics never look like
-   zero). Next: actions with the safety tiers (evict by default, delete as a
-   separate guarded choice). See the
+1. **kpiddle.** 0.2.0 has the TUI and GUI with pod details, evict, rollout
+   restart and delete behind `--allow-actions`, and packages. Next there: a
+   labeled requests/limits mode for clusters without metrics-server, and one
+   bubble per workload for big clusters. See the
    [kpiddle repo](https://github.com/scott-hiemstra/kpiddle).
 2. **Snapshot format and recording/playback.** Define one serialized snapshot
    stream (full, then deltas). It serves as:
@@ -44,12 +44,14 @@ detailed plans live in their repos.
 
 ## Small items
 
-- **Missing `/proc` check.** If `/proc` isn't mounted (a chroot or rescue
-  shell), say so and exit instead of showing an empty view.
-- **README note on partial views.** `hidepid` mounts, containers and sandboxes
-  (Flatpak, Snap) show only part of the system.
+- **AUR packages** for `piddle` and `piddle-gui` (and kpiddle's), alongside the
+  pacman repository on GitHub Pages. Needs an AUR account and SSH key.
 
 ## Done
+
+- **0.4.4: install and edge cases.** A signed package repository on GitHub
+  Pages; `piddle-gui` installs without `piddle`; a clear message when `/proc`
+  isn't mounted; a README section on partial views.
 
 - **0.4.3: repo split.** kpiddle and piddle-net moved to their own repos, and the
   code they share with PIDdle (bubble scene, encodings, GTK canvas) to

@@ -40,6 +40,10 @@ You can also run `piddle-gui` or `piddle-tui` directly. The app-menu entry start
 
 Hover a bubble for CPU, memory and thread count. Click it to open the details window, which has the **Terminate** (SIGTERM) and **Force Kill** (SIGKILL) actions. Both are protected against mistakes (see [Safety](#safety-when-stopping-processes)).
 
+| Process details | Stopping a critical process |
+|---|---|
+| ![Details window: CPU, memory, threads and disk I/O cards, CPU history, process info, command line, network and actions](docs/screenshots/gui-details.png) | ![Terminating dbus-daemon needs its name typed](docs/screenshots/gui-confirm.png) |
+
 - Real data sampled from `/proc` every 250 ms, 500 ms, 1 s or 2 s (configurable), with a pause button.
 - Smooth animation: sizes, colors, fade-in and fade-out ease between samples. A damped, position-based simulation keeps existing bubbles where they are and only nudges neighbours.
 - Five layouts:
@@ -105,6 +109,17 @@ A live process list with system CPU and memory meters. Each row shows:
 - **Disk I/O** comes from `/proc/<pid>/io`: bytes actually read from and written to storage, the same numbers `iotop` shows. Linux only exposes this file for your own processes, so other users' processes show `–` unless PIDdle runs as root. The terminal UI collects it for every process (one more small read each); the GUI reads it only for the process whose details are open.
 - **Network:** Linux has no cheap per-process bandwidth counter. Tools like `nethogs` need root plus packet capture or eBPF. PIDdle instead lists each process's **connections**: its socket inodes from `/proc/<pid>/fd` are matched against the kernel's TCP/UDP tables in the process's own network namespace (so containers show their own addresses). This is done only for the process being viewed, every 2 seconds. Other users' processes need root.
 
+## When PIDdle sees only part of the system
+
+PIDdle shows what `/proc` shows it, and in some setups that is not every process:
+
+- **`hidepid`:** when `/proc` is mounted with `hidepid=1` or `hidepid=2` (also written `noaccess` and `invisible`; check with `findmnt /proc`), you see only your own processes. Root, or members of the group named by the mount's `gid=` option, see everything.
+- **Containers:** inside a container, `/proc` belongs to the container's PID namespace, so you see the container's processes, not the host's. Run PIDdle on the host to see everything; Docker's `--pid=host` also works.
+- **Flatpak and Snap sandboxes:** a sandboxed app sees a reduced `/proc`. PIDdle isn't packaged that way, so this only matters if you build such a package yourself.
+- **No `/proc` at all** (a chroot or rescue shell): PIDdle says so and exits. Mount it with `mount -t proc proc /proc`.
+
+Totals in the header, the sidebar and the app groups count only the processes PIDdle can see.
+
 ## Safety when stopping processes
 
 - **Blocked:** PID 1 (init) and kernel threads can't be signalled at all.
@@ -152,9 +167,9 @@ On a server, install `piddle`. On a desktop, install both; `piddle-gui` alone al
 
 | Distribution | Install (x86_64 file names; ARM64 uses `arm64` / `aarch64`) |
 |---|---|
-| Debian, Ubuntu | `sudo apt install ./piddle_0.4.3_amd64.deb ./piddle-gui_0.4.3_amd64.deb` |
-| Fedora, RHEL, openSUSE | `sudo dnf install ./piddle-0.4.3-1.x86_64.rpm ./piddle-gui-0.4.3-1.x86_64.rpm` |
-| Arch Linux | `sudo pacman -U piddle-0.4.3-1-x86_64.pkg.tar.zst piddle-gui-0.4.3-1-x86_64.pkg.tar.zst` |
+| Debian, Ubuntu | `sudo apt install ./piddle_0.4.4_amd64.deb ./piddle-gui_0.4.4_amd64.deb` |
+| Fedora, RHEL, openSUSE | `sudo dnf install ./piddle-0.4.4-1.x86_64.rpm ./piddle-gui-0.4.4-1.x86_64.rpm` |
+| Arch Linux | `sudo pacman -U piddle-0.4.4-1-x86_64.pkg.tar.zst piddle-gui-0.4.4-1-x86_64.pkg.tar.zst` |
 
 Remove with `apt remove`, `dnf remove` or `pacman -R` and the package names.
 

@@ -5,7 +5,7 @@
 #   scripts/use-local-common.sh off
 # "on" writes a .cargo/config.toml (gitignored) with a [patch] for the
 # piddle-common crates; "off" removes it. Cargo.lock changes while it's on,
-# so run "off" before committing a lockfile. Cargo still fetches the pinned
+# so run "off" before committing a lockfile; "off" restores it. Cargo still fetches the pinned
 # commit (it must be on GitHub), but builds from PATH.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -27,6 +27,9 @@ case "${1:-}" in
   off)
     rm -f "$config"
     rmdir "$root/.cargo" 2>/dev/null || true
+    # While patched, Cargo.lock lists the crates without their git source;
+    # resolve once more so it points at the pinned commit again.
+    (cd "$root" && cargo metadata --format-version 1 >/dev/null)
     echo "building against the pinned piddle-common commit"
     ;;
   *)

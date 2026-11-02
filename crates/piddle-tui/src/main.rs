@@ -50,6 +50,10 @@ fn main() -> std::io::Result<()> {
             }
         }
     }
+    if let Err(why) = sampler::check_proc() {
+        eprintln!("piddle-tui: {why}");
+        std::process::exit(1);
+    }
     if !std::io::stdout().is_terminal() {
         eprintln!("piddle-tui: needs an interactive terminal");
         std::process::exit(2);

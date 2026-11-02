@@ -144,6 +144,26 @@ pub struct Sampler {
     self_pid: i32,
 }
 
+/// Check that `/proc` is mounted. PIDdle reads every process from it, so
+/// without it the view would be empty rather than wrong; say why instead.
+/// The error is a complete message for the user.
+pub fn check_proc() -> Result<(), String> {
+    check_proc_at(std::path::Path::new("/proc"))
+}
+
+fn check_proc_at(proc: &std::path::Path) -> Result<(), String> {
+    // A mounted procfs always has /proc/stat and /proc/self; an empty
+    // mount point (a chroot or rescue shell) has neither.
+    if proc.join("stat").is_file() && proc.join("self").exists() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} is not mounted, so there are no processes to show. PIDdle reads them from there.\n\
+         In a chroot or rescue shell, mount it first:  mount -t proc proc /proc",
+        proc.display()
+    ))
+}
+
 /// Run a [`Sampler`] on a background thread. The newest snapshot replaces any
 /// that has not been consumed yet, so slow consumers never see stale data.
 pub fn spawn(control: Arc<Control>) -> async_channel::Receiver<Snapshot> {
@@ -523,6 +543,21 @@ fn load_users() -> HashMap<u32, Arc<str>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_proc_is_reported() {
+        let dir = std::env::temp_dir().join(format!("piddle-proc-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let err = check_proc_at(&dir).unwrap_err();
+        assert!(err.contains("is not mounted") && err.contains("mount -t proc"), "{err}");
+        // A procfs-like layout passes.
+        std::fs::write(dir.join("stat"), "cpu  1 2 3 4\n").unwrap();
+        std::fs::create_dir_all(dir.join("self")).unwrap();
+        assert_eq!(check_proc_at(&dir), Ok(()));
+        std::fs::remove_dir_all(&dir).unwrap();
+        // And the real one, on the machine running the tests.
+        assert_eq!(check_proc(), Ok(()));
+    }
 
     #[test]
     fn parses_comm_with_parens_and_spaces() {

@@ -14,6 +14,7 @@ use piddle_core::actions::{Assessment, Signal, assess, exe_path, fmt_age, send_s
 use piddle_core::encode::{cpu_color, fmt_bytes, fmt_cpu, fmt_rate};
 use piddle_core::net;
 use piddle_core::sampler::io_totals;
+use piddle_gtk::details::{self, set_text as set, stat_card};
 
 /// Seconds of CPU history shown in the graph (one point per refresh).
 const HISTORY: usize = 120;
@@ -23,24 +24,7 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
     let Some(info) = view.borrow().proc_info(pid).cloned() else { return };
     let start_ticks = info.start_ticks;
 
-    let header = gtk::HeaderBar::new();
-    let title = gtk::Label::new(Some("Process details"));
-    title.add_css_class("title");
-    header.set_title_widget(Some(&title));
-
-    let win = gtk::Window::builder()
-        .title(format!("{} — PID {}", info.name, pid))
-        .transient_for(parent)
-        .default_width(640)
-        .titlebar(&header)
-        .build();
-    win.add_css_class("details");
-
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 16);
-    root.set_margin_top(18);
-    root.set_margin_bottom(18);
-    root.set_margin_start(20);
-    root.set_margin_end(20);
+    let (win, root) = details::window(parent, "Process details", &format!("{} — PID {}", info.name, pid), 640);
 
     // ---- identity: CPU-colored badge, name, subtitle
     let cpu_now = Rc::new(std::cell::Cell::new(info.cpu as f64));
@@ -212,8 +196,6 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
     footer.append(&term);
     footer.append(&kill);
     root.append(&footer);
-
-    win.set_child(Some(&root));
 
     let exe = exe_path(pid).unwrap_or_else(|| "not accessible".into());
 
@@ -423,7 +405,18 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
                     }
                 };
                 if a.is_critical() {
-                    confirm_typed(&win, verb, &name, pid, &a.warnings, &detail, send);
+                    let heading = format!("{verb} “{name}” (PID {pid})?");
+                    let warning = a.warnings.join("\n\n");
+                    let c = details::TypedConfirm {
+                        title: "Critical process",
+                        heading: &heading,
+                        warning: &warning,
+                        detail: &detail,
+                        name: &name,
+                        verb,
+                        placeholder: "process name",
+                    };
+                    details::confirm_typed(&win, c, send);
                 } else {
                     let dialog = gtk::AlertDialog::builder()
                         .modal(true)
@@ -443,163 +436,7 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
         ));
     }
 
-    // Escape closes the window, like other GTK dialogs. Confirm dialogs are
-    // separate modal windows with their own handling.
-    let esc = gtk::ShortcutController::new();
-    // Capture phase: runs even when a focused child (the logs view) would
-    // otherwise see the key first.
-    esc.set_propagation_phase(gtk::PropagationPhase::Capture);
-    esc.add_shortcut(gtk::Shortcut::new(
-        Some(gtk::KeyvalTrigger::new(gtk::gdk::Key::Escape, gtk::gdk::ModifierType::empty())),
-        Some(gtk::CallbackAction::new(|w, _| {
-            if let Some(w) = w.downcast_ref::<gtk::Window>() {
-                w.close();
-            }
-            glib::Propagation::Stop
-        })),
-    ));
-    win.add_controller(esc);
-
     win.present();
-}
-
-/// Stronger confirmation for critical processes: the user must type the
-/// process name before the action button becomes available.
-fn confirm_typed(
-    parent: &gtk::Window,
-    verb: &str,
-    name: &str,
-    pid: i32,
-    warnings: &[String],
-    detail: &str,
-    on_confirm: impl Fn() + 'static,
-) {
-    let dlg = gtk::Window::builder().transient_for(parent).modal(true).resizable(false).title(verb).build();
-    dlg.add_css_class("details");
-    dlg.add_css_class("confirm");
-    let header = gtk::HeaderBar::new();
-    header.set_show_title_buttons(false);
-    let t = gtk::Label::new(Some("Critical process"));
-    t.add_css_class("title");
-    header.set_title_widget(Some(&t));
-    dlg.set_titlebar(Some(&header));
-
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    root.set_margin_top(18);
-    root.set_margin_bottom(18);
-    root.set_margin_start(20);
-    root.set_margin_end(20);
-    let heading = gtk::Label::builder()
-        .label(format!("{verb} “{name}” (PID {pid})?"))
-        .xalign(0.0)
-        .wrap(true)
-        .width_chars(44)
-        .max_width_chars(56)
-        .build();
-    heading.add_css_class("confirm-heading");
-    root.append(&heading);
-    let warn = gtk::Label::builder()
-        .label(warnings.join("\n\n"))
-        .xalign(0.0)
-        .wrap(true)
-        .width_chars(44)
-        .max_width_chars(56)
-        .build();
-    warn.add_css_class("risk-banner");
-    root.append(&warn);
-    let det =
-        gtk::Label::builder().label(detail.trim()).xalign(0.0).wrap(true).width_chars(44).max_width_chars(56).build();
-    det.add_css_class("card-sub");
-    root.append(&det);
-    let prompt = gtk::Label::builder().xalign(0.0).build();
-    prompt.set_markup(&format!("Type <b>{}</b> to confirm:", piddle_gtk::draw::glib_escape(name)));
-    root.append(&prompt);
-    let entry = gtk::Entry::builder().placeholder_text("process name").build();
-    entry.add_css_class("confirm-entry");
-    root.append(&entry);
-
-    let cancel = gtk::Button::with_label("Cancel");
-    cancel.add_css_class("action");
-    let go = gtk::Button::with_label(verb);
-    go.add_css_class("action");
-    go.add_css_class("destructive-action");
-    go.set_sensitive(false);
-    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    buttons.set_halign(gtk::Align::End);
-    buttons.set_margin_top(6);
-    buttons.append(&cancel);
-    buttons.append(&go);
-    root.append(&buttons);
-    dlg.set_child(Some(&root));
-
-    let expected = name.to_string();
-    entry.connect_changed(glib::clone!(
-        #[weak]
-        go,
-        move |e| go.set_sensitive(e.text().trim() == expected)
-    ));
-    entry.connect_activate(glib::clone!(
-        #[weak]
-        go,
-        move |_| {
-            if go.is_sensitive() {
-                go.emit_clicked();
-            }
-        }
-    ));
-    cancel.connect_clicked(glib::clone!(
-        #[weak]
-        dlg,
-        move |_| dlg.close()
-    ));
-    go.connect_clicked(glib::clone!(
-        #[weak]
-        dlg,
-        move |_| {
-            dlg.close();
-            on_confirm();
-        }
-    ));
-    let esc = gtk::EventControllerKey::new();
-    esc.connect_key_pressed(glib::clone!(
-        #[weak]
-        dlg,
-        #[upgrade_or]
-        glib::Propagation::Proceed,
-        move |_, key, _, _| {
-            if key == gtk::gdk::Key::Escape {
-                dlg.close();
-                return glib::Propagation::Stop;
-            }
-            glib::Propagation::Proceed
-        }
-    ));
-    dlg.add_controller(esc);
-    dlg.present();
-    entry.grab_focus();
-}
-
-/// Adds a stat card to `row` and returns its (value, caption) labels.
-fn stat_card(row: &gtk::Box, title: &str) -> (gtk::Label, gtk::Label) {
-    let card = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    card.add_css_class("details-card");
-    let t = gtk::Label::builder().label(title).xalign(0.0).build();
-    t.add_css_class("card-label");
-    let v = gtk::Label::builder().xalign(0.0).build();
-    v.add_css_class("big-num");
-    let s = gtk::Label::builder().xalign(0.0).ellipsize(gtk::pango::EllipsizeMode::End).build();
-    s.add_css_class("card-sub");
-    card.append(&t);
-    card.append(&v);
-    card.append(&s);
-    row.append(&card);
-    (v, s)
-}
-
-fn set(label: &gtk::Label, text: &str) {
-    if label.text() != text {
-        label.set_text(text);
-    }
 }
 
 fn draw_history(cr: &gtk::cairo::Context, w: f64, h: f64, hist: &VecDeque<f64>) {

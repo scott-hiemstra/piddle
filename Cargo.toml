@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/piddle", "crates/piddle-core", "crates/piddle-gui", "crates/piddle-tui"]
 
 [workspace.package]
-version = "0.4.3"
+version = "0.4.4"
 edition = "2024"
 license = "MIT"
 authors = ["Scott Hiemstra <scott@hiemstra.us>"]
@@ -12,9 +12,9 @@ authors = ["Scott Hiemstra <scott@hiemstra.us>"]
 # same commit for each). scripts/bump-common.sh vX.Y.Z updates them, and
 # scripts/use-local-common.sh builds against a sibling checkout instead.
 [workspace.dependencies]
-piddle-encode = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "ae71c77535f9fe68026fa33b4fad775c97dcf9b0" } # v0.1.0
-piddle-scene = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "ae71c77535f9fe68026fa33b4fad775c97dcf9b0" } # v0.1.0
-piddle-gtk = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "ae71c77535f9fe68026fa33b4fad775c97dcf9b0" } # v0.1.0
+piddle-encode = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "5a28d97804c2dbcd2dd7b25a2e74ed0bc2ca5ac9" } # v0.1.1
+piddle-scene = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "5a28d97804c2dbcd2dd7b25a2e74ed0bc2ca5ac9" } # v0.1.1
+piddle-gtk = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "5a28d97804c2dbcd2dd7b25a2e74ed0bc2ca5ac9" } # v0.1.1
 
 [profile.release]
 opt-level = 3

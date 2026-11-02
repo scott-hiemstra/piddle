@@ -7,6 +7,7 @@ use piddle_core::actions::{exe_path, fmt_age, state_name};
 use piddle_core::encode::{cpu_color, fmt_bytes, fmt_cpu, fmt_rate};
 use piddle_core::logs;
 use piddle_core::net;
+use piddle_core::sampler::SYSTEM_FIGURES_MISSING;
 use piddle_core::service::ServiceKind;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
@@ -87,7 +88,7 @@ fn draw_header(f: &mut Frame, app: &App, pal: &Palette, area: Rect) {
         return;
     };
     let [l1, l2, l3] = Layout::vertical([Constraint::Length(1); 3]).areas(area);
-    let mem_frac = if s.mem_total > 0 { s.mem_used as f64 / s.mem_total as f64 } else { 0.0 };
+    let mem_frac = s.memory.map_or(0.0, |m| m.used as f64 / m.total as f64);
     let threads: u64 = s.procs.iter().map(|p| p.threads as u64).sum();
     let self_cpu = s.procs.iter().find(|p| p.pid == s.self_pid).map(|p| p.cpu).unwrap_or(0.0);
 
@@ -109,24 +110,22 @@ fn draw_header(f: &mut Frame, app: &App, pal: &Palette, area: Rect) {
         ),
     ]);
     f.render_widget(Paragraph::new(title), l1);
-    f.render_widget(
-        meter(
-            " CPU ",
-            s.total_cpu as f64 / 100.0,
-            &format!("{:.1}% of all cores", s.total_cpu),
-            pal.cpu(s.total_cpu as f64),
-            pal,
-        ),
-        l2,
-    );
+    // Unknown whole-machine figures (a subset=pid /proc) show as such, never as 0.
+    let cpu_meter = match s.total_cpu {
+        Some(c) => meter(" CPU ", c as f64 / 100.0, &format!("{c:.1}% of all cores"), pal.cpu(c as f64), pal),
+        None => meter(" CPU ", 0.0, &format!("— {SYSTEM_FIGURES_MISSING}"), pal.fix(DIM), pal),
+    };
+    f.render_widget(cpu_meter, l2);
+    let mem_text = match s.memory {
+        Some(m) => format!("{} / {}", fmt_bytes(m.used), fmt_bytes(m.total)),
+        None => "—".to_string(),
+    };
     f.render_widget(
         meter(
             " MEM ",
             mem_frac,
             &format!(
-                "{} / {}   ·   PIDdle {} CPU, {:.1} ms per sample",
-                fmt_bytes(s.mem_used),
-                fmt_bytes(s.mem_total),
+                "{mem_text}   ·   PIDdle {} CPU, {:.1} ms per sample",
                 fmt_cpu(self_cpu as f64),
                 s.sample_cost.as_secs_f64() * 1e3
             ),
@@ -338,17 +337,18 @@ fn draw_details(f: &mut Frame, app: &App, pal: &Palette) {
     let started = p
         .start_ticks
         .checked_div(s.clk_tck)
-        .map(|since_boot| {
-            let at = s.boot_time + since_boot;
+        .zip(s.boot_time)
+        .map(|(since_boot, boot)| {
+            let at = boot + since_boot;
             let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(at);
             format!("{} ago", fmt_age(now.saturating_sub(at)))
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| "—".into());
     let parent = match app.name_of(p.ppid) {
         Some(n) => format!("{n} ({})", p.ppid),
         None => p.ppid.to_string(),
     };
-    let mem_pct = if s.mem_total > 0 { p.rss as f64 / s.mem_total as f64 * 100.0 } else { 0.0 };
+    let mem_pct = s.memory.map(|m| m.percent_of(p.rss));
     let label = |k: &str| Span::styled(format!("{k:<12}"), Style::new().fg(pal.fix(DIM)));
     let mut lines = vec![
         Line::from(vec![
@@ -366,7 +366,12 @@ fn draw_details(f: &mut Frame, app: &App, pal: &Palette) {
         ]),
         Line::from(vec![
             label("Memory"),
-            Span::raw(format!("{} resident ({mem_pct:.1}% of RAM) · {} virtual", fmt_bytes(p.rss), fmt_bytes(p.vsize))),
+            Span::raw(format!(
+                "{} resident{} · {} virtual",
+                fmt_bytes(p.rss),
+                mem_pct.map_or(String::new(), |m| format!(" ({m:.1}% of RAM)")),
+                fmt_bytes(p.vsize)
+            )),
         ]),
         Line::from(vec![label("Threads"), Span::raw(format!("{}   nice {}", p.threads, p.nice))]),
         Line::from(vec![

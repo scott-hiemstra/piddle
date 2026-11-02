@@ -16,9 +16,9 @@ fn main() {
         let mut snap = s.sample();
         snap.procs.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
         println!(
-            "{} processes · system CPU {:.1}% · sample took {:.2} ms",
+            "{} processes · system CPU {} · sample took {:.2} ms",
             snap.procs.len(),
-            snap.total_cpu,
+            snap.total_cpu.map_or("—".to_string(), |c| format!("{c:.1}%")),
             snap.sample_cost.as_secs_f64() * 1e3
         );
         for p in snap.procs.iter().take(5) {

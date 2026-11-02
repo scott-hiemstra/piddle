@@ -632,8 +632,19 @@ fn build_ui(app: &gtk::Application) {
 
                 let v = view.borrow();
                 let m = v.meta;
-                stat_vals[0].set_text(&format!("{:.1}%", m.total_cpu));
-                stat_vals[1].set_text(&format!("{} / {}", fmt_bytes(m.mem_used), fmt_bytes(m.mem_total)));
+                // Unknown (a subset=pid /proc) shows as such, never as 0.
+                let missing = piddle_core::sampler::SYSTEM_FIGURES_MISSING;
+                match m.total_cpu {
+                    Some(c) => stat_vals[0].set_text(&format!("{c:.1}%")),
+                    None => stat_vals[0].set_text("—"),
+                }
+                match m.memory {
+                    Some(mem) => stat_vals[1].set_text(&format!("{} / {}", fmt_bytes(mem.used), fmt_bytes(mem.total))),
+                    None => stat_vals[1].set_text("—"),
+                }
+                for v in &stat_vals[..2] {
+                    v.set_tooltip_text(if v.text() == "—" { Some(missing) } else { None });
+                }
                 stat_vals[2].set_text(&m.procs.to_string());
                 stat_vals[3].set_text(&m.threads.to_string());
                 stat_vals[4].set_text(&format!("{:.1} ms", m.sample_cost.as_secs_f64() * 1000.0));

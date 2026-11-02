@@ -10,7 +10,7 @@ use gtk::prelude::*;
 use gtk::{gsk, pango};
 
 use piddle_core::encode::{Rgb, cpu_color, fmt_bytes, fmt_cpu, mem_radius, mix};
-use piddle_core::sampler::{ProcInfo, Snapshot};
+use piddle_core::sampler::{Memory, ProcInfo, Snapshot};
 use piddle_core::service::ServiceKind;
 use piddle_gtk::Paint;
 use piddle_gtk::draw::{card, font, glib_escape, layout, point, rect, rgb, rgba, ring, text};
@@ -107,10 +107,9 @@ pub type Bubble = piddle_scene::Bubble<Proc>;
 pub struct Meta {
     pub ncpu: usize,
     pub clk_tck: u64,
-    pub boot_time: u64,
-    pub total_cpu: f32,
-    pub mem_total: u64,
-    pub mem_used: u64,
+    pub boot_time: Option<u64>,
+    pub total_cpu: Option<f32>,
+    pub memory: Option<Memory>,
     pub sample_cost: Duration,
     pub self_cpu: f32,
     pub procs: usize,
@@ -198,8 +197,7 @@ impl View {
             clk_tck: snap.clk_tck,
             boot_time: snap.boot_time,
             total_cpu: snap.total_cpu,
-            mem_total: snap.mem_total,
-            mem_used: snap.mem_used,
+            memory: snap.memory,
             sample_cost: snap.sample_cost,
             self_cpu: snap.procs.iter().find(|p| p.pid == snap.self_pid).map(|p| p.cpu).unwrap_or(0.0),
             procs: snap.procs.len(),
@@ -505,12 +503,12 @@ impl View {
     fn draw_hover_card(&self, snap: &gtk::Snapshot, pctx: &pango::Context) {
         let Some(b) = self.scene.hover.and_then(|p| self.bubble(p)) else { return };
         let p = &b.item.info;
-        let mem_pct = if self.meta.mem_total > 0 { p.rss as f64 / self.meta.mem_total as f64 * 100.0 } else { 0.0 };
+        let mem_pct = self.meta.memory.map_or(String::new(), |m| format!(" ({:.1}% RAM)", m.percent_of(p.rss)));
         let markup = format!(
             "<span size='large' weight='bold'>{}</span>\n\
              <span alpha='65%'>PID {} · {}\n{} · {}</span>\n\n\
              CPU\t\t<b>{}</b> <span alpha='60%'>of one core</span>\n\
-             Memory\t<b>{}</b> <span alpha='60%'>({:.1}% RAM)</span>\n\
+             Memory\t<b>{}</b><span alpha='60%'>{}</span>\n\
              Threads\t<b>{}</b>\n\n\
              <span alpha='50%' size='small'>Click for details and actions</span>",
             glib_escape(&p.name),

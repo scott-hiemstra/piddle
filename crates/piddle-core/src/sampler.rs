@@ -72,14 +72,35 @@ pub struct Snapshot {
     pub procs: Vec<ProcInfo>,
     pub ncpu: usize,
     pub clk_tck: u64,
-    pub boot_time: u64,
-    /// Whole-machine busy fraction, 0..=100.
-    pub total_cpu: f32,
-    pub mem_total: u64,
-    pub mem_used: u64,
+    /// Boot time (Unix seconds) from `/proc/stat`. `None`, like the other
+    /// system-wide figures below, when `/proc` shows processes only (a
+    /// `subset=pid` mount): they are unknown there, not zero. See
+    /// [`SYSTEM_FIGURES_MISSING`].
+    pub boot_time: Option<u64>,
+    /// Whole-machine busy fraction, 0..=100, from `/proc/stat`.
+    pub total_cpu: Option<f32>,
+    /// Total and used RAM from `/proc/meminfo`.
+    pub memory: Option<Memory>,
     pub sample_cost: Duration,
     pub self_pid: i32,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Memory {
+    pub total: u64,
+    pub used: u64,
+}
+
+impl Memory {
+    /// `bytes` as a percentage of RAM.
+    pub fn percent_of(&self, bytes: u64) -> f64 {
+        bytes as f64 / self.total.max(1) as f64 * 100.0
+    }
+}
+
+/// What the interfaces say in place of the whole-machine CPU, memory and
+/// start times when `/proc` doesn't provide them.
+pub const SYSTEM_FIGURES_MISSING: &str = "not available: /proc shows processes only (subset=pid)";
 
 /// Shared knobs for a background sampler.
 pub struct Control {
@@ -138,7 +159,7 @@ pub struct Sampler {
     clk_tck: u64,
     page_size: u64,
     ncpu: usize,
-    boot_time: u64,
+    boot_time: Option<u64>,
     last: Option<Instant>,
     prev_cpu: (u64, u64),
     self_pid: i32,
@@ -152,9 +173,11 @@ pub fn check_proc() -> Result<(), String> {
 }
 
 fn check_proc_at(proc: &std::path::Path) -> Result<(), String> {
-    // A mounted procfs always has /proc/stat and /proc/self; an empty
-    // mount point (a chroot or rescue shell) has neither.
-    if proc.join("stat").is_file() && proc.join("self").exists() {
+    // Any mounted procfs has /proc/self; an empty mount point (a chroot or
+    // rescue shell) doesn't. Don't require /proc/stat: a `subset=pid` mount
+    // hides it but still shows every process, and then only the
+    // whole-machine figures are missing (see SYSTEM_FIGURES_MISSING).
+    if proc.join("self").exists() {
         return Ok(());
     }
     Err(format!(
@@ -202,8 +225,7 @@ impl Sampler {
         let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(1) as u64;
         let ncpu = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
         let stat = std::fs::read_to_string("/proc/stat").unwrap_or_default();
-        let boot_time =
-            stat.lines().find_map(|l| l.strip_prefix("btime ")).and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+        let boot_time = stat.lines().find_map(|l| l.strip_prefix("btime ")).and_then(|v| v.trim().parse().ok());
         Self {
             cache: HashMap::new(),
             users: load_users(),
@@ -260,7 +282,7 @@ impl Sampler {
         }
 
         let total_cpu = self.read_total_cpu();
-        let (mem_total, mem_used) = read_meminfo(&mut self.buf);
+        let memory = read_meminfo(&mut self.buf);
 
         Snapshot {
             procs,
@@ -268,8 +290,7 @@ impl Sampler {
             clk_tck: self.clk_tck,
             boot_time: self.boot_time,
             total_cpu,
-            mem_total,
-            mem_used,
+            memory,
             sample_cost: t0.elapsed(),
             self_pid: self.self_pid,
         }
@@ -381,15 +402,15 @@ impl Sampler {
         }
     }
 
-    fn read_total_cpu(&mut self) -> f32 {
+    /// `None` when `/proc/stat` can't be read; `Some(0.0)` on the first
+    /// sample, which has no previous reading to compare with.
+    fn read_total_cpu(&mut self) -> Option<f32> {
         self.buf.clear();
-        if File::open("/proc/stat").and_then(|mut f| f.read_to_string(&mut self.buf)).is_err() {
-            return 0.0;
-        }
-        let Some(line) = self.buf.lines().next() else { return 0.0 };
+        File::open("/proc/stat").and_then(|mut f| f.read_to_string(&mut self.buf)).ok()?;
+        let line = self.buf.lines().next()?;
         let v: Vec<u64> = line.split_whitespace().skip(1).filter_map(|x| x.parse().ok()).collect();
         if v.len() < 5 {
-            return 0.0;
+            return None;
         }
         // guest time is already included in user/nice.
         let total: u64 = v.iter().take(8).sum();
@@ -398,10 +419,10 @@ impl Sampler {
         self.prev_cpu = (total, idle);
         let dt = total.saturating_sub(pt);
         if pt == 0 || dt == 0 {
-            return 0.0;
+            return Some(0.0);
         }
         let di = idle.saturating_sub(pi);
-        (dt.saturating_sub(di) as f64 / dt as f64 * 100.0) as f32
+        Some((dt.saturating_sub(di) as f64 / dt as f64 * 100.0) as f32)
     }
 }
 
@@ -509,11 +530,10 @@ pub fn start_ticks_of(pid: i32) -> Option<u64> {
     parse_stat(&read_lossy(&format!("/proc/{pid}/stat"), &mut Vec::new())?).map(|st| st.start_ticks)
 }
 
-fn read_meminfo(buf: &mut String) -> (u64, u64) {
+/// `None` when `/proc/meminfo` can't be read or has no total.
+fn read_meminfo(buf: &mut String) -> Option<Memory> {
     buf.clear();
-    if File::open("/proc/meminfo").and_then(|mut f| f.read_to_string(buf)).is_err() {
-        return (0, 0);
-    }
+    File::open("/proc/meminfo").and_then(|mut f| f.read_to_string(buf)).ok()?;
     let mut total = 0;
     let mut avail = 0;
     for line in buf.lines() {
@@ -524,7 +544,7 @@ fn read_meminfo(buf: &mut String) -> (u64, u64) {
             avail = kb(line);
         }
     }
-    (total, total.saturating_sub(avail))
+    (total > 0).then(|| Memory { total, used: total.saturating_sub(avail) })
 }
 
 fn load_users() -> HashMap<u32, Arc<str>> {
@@ -550,9 +570,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let err = check_proc_at(&dir).unwrap_err();
         assert!(err.contains("is not mounted") && err.contains("mount -t proc"), "{err}");
-        // A procfs-like layout passes.
-        std::fs::write(dir.join("stat"), "cpu  1 2 3 4\n").unwrap();
+        // A subset=pid mount has /proc/self (and the PID directories) but
+        // no /proc/stat: processes are visible, so that passes.
         std::fs::create_dir_all(dir.join("self")).unwrap();
+        assert_eq!(check_proc_at(&dir), Ok(()));
+        std::fs::write(dir.join("stat"), "cpu  1 2 3 4\n").unwrap();
         assert_eq!(check_proc_at(&dir), Ok(()));
         std::fs::remove_dir_all(&dir).unwrap();
         // And the real one, on the machine running the tests.
@@ -657,6 +679,8 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         let snap = s.sample();
         assert!(snap.procs.iter().any(|p| p.pid == snap.self_pid));
-        assert!(snap.mem_total > 0);
+        // A normal /proc has the whole-machine figures too.
+        assert!(snap.memory.is_some_and(|m| m.total > 0));
+        assert!(snap.total_cpu.is_some() && snap.boot_time.is_some());
     }
 }

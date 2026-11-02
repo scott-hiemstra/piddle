@@ -3,6 +3,19 @@
 Notable changes in each release. The section for a version is published as
 the release notes on GitHub, and a release fails if its section is missing.
 
+## [Unreleased]
+
+### Fixed
+- 0.4.4's new `/proc` check exited when `/proc` is mounted with
+  `subset=pid`, which shows every process but hides `/proc/stat` and
+  `/proc/meminfo`. PIDdle runs there again: processes are listed as usual,
+  and the whole-machine CPU and memory and process start times show "—"
+  with the reason, instead of 0 or a 1970 date. Only a `/proc` with no
+  processes at all (a chroot or rescue shell) stops PIDdle now.
+- `scripts/use-local-common.sh` manages only its own marked block in
+  `.cargo/config.toml` instead of overwriting or deleting the whole file,
+  and refuses to add a second piddle-common patch table.
+
 ## [0.4.4] - 2026-11-01
 
 Easier to install and keep up to date: a signed package repository, and

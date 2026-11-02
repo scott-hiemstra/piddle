@@ -765,10 +765,9 @@ mod tests {
             procs,
             ncpu: 4,
             clk_tck: 100,
-            boot_time: 0,
-            total_cpu: 0.0,
-            mem_total: 1 << 30,
-            mem_used: 0,
+            boot_time: Some(0),
+            total_cpu: Some(0.0),
+            memory: Some(piddle_core::sampler::Memory { total: 1 << 30, used: 0 }),
             sample_cost: Duration::ZERO,
             self_pid: 99_999,
         }

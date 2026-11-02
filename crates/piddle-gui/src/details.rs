@@ -257,8 +257,10 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
                 m.ncpu
             )));
             set(&mem_val, &fmt_bytes(p.rss));
-            let mem_pct = if m.mem_total > 0 { p.rss as f64 / m.mem_total as f64 * 100.0 } else { 0.0 };
-            set(&mem_sub, &format!("{mem_pct:.1}% of RAM"));
+            match m.memory {
+                Some(mem) => set(&mem_sub, &format!("{:.1}% of RAM", mem.percent_of(p.rss))),
+                None => set(&mem_sub, "RAM size unknown"),
+            }
             mem_sub.set_tooltip_text(Some("Resident memory (RSS)"));
             set(&thr_val, &p.threads.to_string());
             set(&thr_sub, if p.kthread { "kernel thread" } else { "in this process" });
@@ -314,8 +316,8 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
             }
             ticks.set(ticks.get().wrapping_add(1));
 
-            let started = if let Some(since_boot) = p.start_ticks.checked_div(m.clk_tck) {
-                let secs = m.boot_time + since_boot;
+            let started = if let Some((since_boot, boot)) = p.start_ticks.checked_div(m.clk_tck).zip(m.boot_time) {
+                let secs = boot + since_boot;
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(secs);
                 let at = glib::DateTime::from_unix_local(secs as i64)
                     .ok()
@@ -324,7 +326,8 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
                     .unwrap_or_default();
                 format!("{at}  ({} ago)", fmt_age(now.saturating_sub(secs)))
             } else {
-                String::new()
+                // No boot time: /proc shows processes only (subset=pid).
+                "—".to_string()
             };
             for (key, label) in &values {
                 let text = match *key {

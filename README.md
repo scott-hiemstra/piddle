@@ -114,6 +114,7 @@ A live process list with system CPU and memory meters. Each row shows:
 PIDdle shows what `/proc` shows it, and in some setups that is not every process:
 
 - **`hidepid`:** when `/proc` is mounted with `hidepid=1` or `hidepid=2` (also written `noaccess` and `invisible`; check with `findmnt /proc`), you see only your own processes. Root, or members of the group named by the mount's `gid=` option, see everything.
+- **`subset=pid`:** a `/proc` mounted with `subset=pid` shows the processes but hides the whole-machine files (`/proc/stat`, `/proc/meminfo`). PIDdle lists the processes as usual and shows the system CPU, memory and process start times as "—", never as 0.
 - **Containers:** inside a container, `/proc` belongs to the container's PID namespace, so you see the container's processes, not the host's. Run PIDdle on the host to see everything; Docker's `--pid=host` also works.
 - **Flatpak and Snap sandboxes:** a sandboxed app sees a reduced `/proc`. PIDdle isn't packaged that way, so this only matters if you build such a package yourself.
 - **No `/proc` at all** (a chroot or rescue shell): PIDdle says so and exits. Mount it with `mount -t proc proc /proc`.

@@ -19,9 +19,10 @@ detailed plans live in their repos.
 
 1. **kpiddle.** 0.2.0 has the TUI and GUI with pod details, evict, rollout
    restart and delete behind `--allow-actions`, and packages. Next there: a
-   labeled requests/limits mode for clusters without metrics-server, and one
-   bubble per workload for big clusters. See the
-   [kpiddle repo](https://github.com/scott-hiemstra/kpiddle).
+   labeled requests/limits mode for clusters without metrics-server, one
+   bubble per workload for big clusters, and pod events and logs in the
+   details. See "Next" in the kpiddle repo's
+   [docs/DESIGN.md](https://github.com/scott-hiemstra/kpiddle/blob/main/docs/DESIGN.md).
 2. **Snapshot format and recording/playback.** Define one serialized snapshot
    stream (full, then deltas). It serves as:
    - a recording file,
@@ -49,10 +50,18 @@ detailed plans live in their repos.
 
 ## Done
 
+- **0.4.5: `subset=pid` fix.** PIDdle runs under a `/proc` mounted with
+  `subset=pid` again, showing the whole-machine figures it can't read as
+  unavailable instead of zero.
+- **piddle-common 0.1.1: shared details windows.** The details-window
+  building blocks and the type-the-name confirmation moved to
+  `piddle_gtk::details`, shared with kpiddle. piddle-common also holds the
+  one `use-local-common.sh` (the apps keep thin wrappers), tested in CI.
+- **kpiddle 0.2.0.** GUI pod details and actions, packages and a package
+  repository; see the kpiddle repo.
 - **0.4.4: install and edge cases.** A signed package repository on GitHub
   Pages; `piddle-gui` installs without `piddle`; a clear message when `/proc`
   isn't mounted; a README section on partial views.
-
 - **0.4.3: repo split.** kpiddle and piddle-net moved to their own repos, and the
   code they share with PIDdle (bubble scene, encodings, GTK canvas) to
   piddle-common.

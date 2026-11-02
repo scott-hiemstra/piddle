@@ -1334,11 +1334,11 @@ dependencies = [
 
 [[package]]
 name = "piddle"
-version = "0.4.4"
+version = "0.4.5"
 
 [[package]]
 name = "piddle-core"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "async-channel",
  "libc",
@@ -1363,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "piddle-gui"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "gtk4",
  "pangocairo",
@@ -1379,7 +1379,7 @@ source = "git+https://github.com/scott-hiemstra/piddle-common?rev=5a28d97804c2db
 
 [[package]]
 name = "piddle-tui"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "piddle-core",
  "ratatui",

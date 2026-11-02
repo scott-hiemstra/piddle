@@ -3,7 +3,14 @@
 Notable changes in each release. The section for a version is published as
 the release notes on GitHub, and a release fails if its section is missing.
 
-## [Unreleased]
+## [0.4.5] - 2026-11-01
+
+A fix for 0.4.4: on systems whose `/proc` is mounted with `subset=pid`,
+PIDdle exited instead of showing the processes. It runs there again, and
+shows the whole-machine figures it can't read as unavailable rather than
+as zero.
+
+![PIDdle under a subset=pid /proc: every process shown, system CPU and memory shown as unavailable](https://raw.githubusercontent.com/scott-hiemstra/piddle/v0.4.5/docs/screenshots/gui-subset-pid.png)
 
 ### Fixed
 - 0.4.4's new `/proc` check exited when `/proc` is mounted with

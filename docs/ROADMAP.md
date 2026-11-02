@@ -5,7 +5,7 @@ CPU load, and related things are grouped.
 
 | Tool       | Scope                               | Status                          |
 |------------|-------------------------------------|---------------------------------|
-| PIDdle     | one machine (GUI + TUI)             | released, 0.4.4                 |
+| PIDdle     | one machine (GUI + TUI)             | released, 0.4.5                 |
 | kpiddle    | a Kubernetes cluster                | released, 0.2.0, in its own repo |
 | recording  | record and play back, for all three | planned                         |
 | piddle-mcp | read-only access for AI agents      | planned                         |

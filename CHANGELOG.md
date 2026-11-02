@@ -5,6 +5,12 @@ the release notes on GitHub, and a release fails if its section is missing.
 
 ## [Unreleased]
 
+### Changed
+- `scripts/use-local-common.sh` is now a thin wrapper around piddle-common's
+  own copy, the only one; it finds the checkout via a path after `on`,
+  `$PIDDLE_COMMON` or `../piddle-common`, and says how to undo the block by
+  hand if there is none.
+
 ### Fixed
 - `scripts/use-local-common.sh` no longer takes over a `.cargo/config.toml`
   written by its old version if settings were added to it since; it lists

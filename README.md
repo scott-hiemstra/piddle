@@ -224,7 +224,7 @@ cargo test --workspace                 # unit tests
 cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings   # what CI checks
 ```
 
-The bubble scene, the color and size encodings and the GTK canvas come from [piddle-common](https://github.com/scott-hiemstra/piddle-common), pinned to a release tag's commit in `Cargo.toml`. To change shared code and PIDdle together, check out piddle-common next to this repo and run `scripts/use-local-common.sh on` (and `off` before committing). After a piddle-common release, `scripts/bump-common.sh vX.Y.Z` moves the pin.
+The bubble scene, the color and size encodings and the GTK canvas come from [piddle-common](https://github.com/scott-hiemstra/piddle-common), pinned to a release tag's commit in `Cargo.toml`. To change shared code and PIDdle together, check out piddle-common next to this repo and run `scripts/use-local-common.sh on` (and `off` before committing; it re-resolves Cargo.lock against the pinned commit, so check `git diff Cargo.lock`). The script hands off to the checkout's own `scripts/use-local-common.sh`, so one copy serves every app. After a piddle-common release, `scripts/bump-common.sh vX.Y.Z` moves the pin.
 
 ## Project layout
 

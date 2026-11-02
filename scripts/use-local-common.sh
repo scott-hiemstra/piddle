@@ -16,11 +16,29 @@ begin="# >>> use-local-common.sh (remove with: scripts/use-local-common.sh off)"
 end="# <<< use-local-common.sh"
 table='[patch."https://github.com/scott-hiemstra/piddle-common"]'
 
+legacy='# Written by scripts/use-local-common.sh'
+
+# A config written by the old version of this script (no markers, the whole
+# file was generated) can be taken over only if it still holds nothing but
+# what that version wrote: its header, the patch table and the crates' path
+# lines. Anything added since might be lost, so then refuse and leave it.
+check_legacy() {
+  [ -f "$config" ] && head -1 "$config" | grep -qF "$legacy" || return 0
+  local extra
+  extra=$(grep -vxE "${legacy}.*|\\[patch\.\"https://github\.com/scott-hiemstra/piddle-common\"\\]|piddle-[a-z]+ = \\{ path = \".*\" \\}|[[:space:]]*" "$config" || true)
+  if [ -n "$extra" ]; then
+    echo "error: $config was written by an older version of this script and has other settings added since:" >&2
+    printf '%s\n' "$extra" | sed 's/^/  /' >&2
+    echo "Remove its first lines (the header, the $table table and its piddle-* path lines) by hand, then run this again." >&2
+    exit 1
+  fi
+}
+
 # The config without our block (empty if there is no config).
 others() {
   [ -f "$config" ] || return 0
-  # Written whole by an older version of this script: all of it is ours.
-  if head -1 "$config" | grep -q '^# Written by scripts/use-local-common.sh'; then
+  # A pure old-style file (see check_legacy) is all ours.
+  if head -1 "$config" | grep -qF "$legacy"; then
     return 0
   fi
   awk -v b="$begin" -v e="$end" '$0 == b { skip = 1; next } $0 == e { skip = 0; next } !skip' "$config"
@@ -40,6 +58,7 @@ write_config() {
 case "${1:-}" in
   on)
     common=$(cd "${2:-$root/../piddle-common}" && pwd)
+    check_legacy
     rest=$(others)
     # A second table with the same name would make the file invalid TOML.
     if grep -qF "$table" <<<"$rest"; then
@@ -64,6 +83,7 @@ case "${1:-}" in
     echo "building against $common"
     ;;
   off)
+    check_legacy
     write_config "$(others)"
     # While patched, Cargo.lock lists the crates without their git source;
     # resolve once more so it points at the pinned commit again.

@@ -3,6 +3,13 @@
 Notable changes in each release. The section for a version is published as
 the release notes on GitHub, and a release fails if its section is missing.
 
+## [Unreleased]
+
+### Fixed
+- `scripts/use-local-common.sh` no longer takes over a `.cargo/config.toml`
+  written by its old version if settings were added to it since; it lists
+  them and asks for the old lines to be removed by hand.
+
 ## [0.4.5] - 2026-11-01
 
 A fix for 0.4.4: on systems whose `/proc` is mounted with `subset=pid`,

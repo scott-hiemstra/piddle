@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use piddle_core::actions::{Assessment, Signal, assess, send_signal};
+use piddle_core::containers::{self, Choice, Filter, GroupKind, Placement};
 use piddle_core::logs::{self, Entry, Query, Stream};
 use piddle_core::net::{Sockets, sockets_of};
 use piddle_core::sampler::{Control, ProcInfo, Snapshot};
@@ -28,6 +29,8 @@ pub enum View {
     Service,
     Parent,
     Tree,
+    /// By Compose project, pod and container; offered only while containers run.
+    Containers,
 }
 
 impl View {
@@ -38,15 +41,18 @@ impl View {
             View::Service => "by service",
             View::Parent => "by parent",
             View::Tree => "tree",
+            View::Containers => "by container",
         }
     }
-    fn next(self) -> Self {
+    /// The next view; `containers` says whether "by container" is offered.
+    fn next(self, containers: bool) -> Self {
         match self {
             View::List => View::App,
             View::App => View::Service,
             View::Service => View::Parent,
             View::Parent => View::Tree,
-            View::Tree => View::List,
+            View::Tree if containers => View::Containers,
+            View::Tree | View::Containers => View::List,
         }
     }
 }
@@ -85,8 +91,12 @@ pub enum Row {
     Group {
         key: String,
         label: String,
-        /// Set in the service view.
+        /// Set in the service view, and for containers in the containers view.
         kind: Option<ServiceKind>,
+        /// Compose project or pod rows in the containers view.
+        manager: Option<GroupKind>,
+        /// 1 for containers inside a project or pod.
+        depth: u8,
         count: usize,
         cpu: f32,
         rss: u64,
@@ -110,6 +120,8 @@ pub enum Mode {
     /// Journal of the details process's service (opened from Details).
     Logs,
     Help,
+    /// The containers picker, with the highlighted entry.
+    Containers(usize),
 }
 
 /// Lines kept in the logs view.
@@ -202,6 +214,14 @@ pub struct App {
     activity: HashMap<i32, Instant>,
     collapsed: HashSet<String>,
     names: HashMap<i32, Arc<str>>,
+    /// What the containers picker limits the view to.
+    pub filter: Filter,
+    /// The picker's entries; empty when no process is in a container.
+    pub choices: Vec<Choice>,
+    /// The filter's container or project is gone; the view says so.
+    pub filter_gone: bool,
+    /// Each service's container placement, for this snapshot.
+    placed: HashMap<usize, Option<Placement>>,
     pub quit: bool,
 }
 
@@ -231,6 +251,10 @@ impl App {
             activity: HashMap::new(),
             collapsed: HashSet::new(),
             names: HashMap::new(),
+            filter: Filter::All,
+            choices: Vec::new(),
+            filter_gone: false,
+            placed: HashMap::new(),
             quit: false,
         }
     }
@@ -281,13 +305,52 @@ impl App {
                 None => self.history_pid = None,
             }
         }
+        self.placed.clear();
+        for p in &snap.procs {
+            let k = Arc::as_ptr(&p.service) as usize;
+            self.placed.entry(k).or_insert_with(|| containers::place(&p.service, &snap.containers));
+        }
+        self.choices = containers::choices(&snap.procs, &snap.containers);
+        match containers::resolve(&self.filter, &self.choices) {
+            Some(f) => {
+                self.filter = f;
+                self.filter_gone = false;
+            }
+            None => self.filter_gone = true,
+        }
+        if self.choices.is_empty() && self.view == View::Containers && self.filter.is_all() {
+            self.view = View::List;
+        }
         self.snap = Some(snap);
         self.refresh_net(false);
         self.rebuild();
     }
 
+    /// Where a process's container sits; `None` outside containers.
+    pub fn placement(&self, p: &ProcInfo) -> Option<&Placement> {
+        self.placed.get(&(Arc::as_ptr(&p.service) as usize))?.as_ref()
+    }
+
+    /// The containers line for the header: what the view is limited to.
+    pub fn filter_text(&self) -> Option<String> {
+        if self.filter.is_all() {
+            return None;
+        }
+        let name = containers::filter_label(&self.filter, &self.choices);
+        Some(if self.filter_gone {
+            format!("{name} is no longer running · c: choose another · Esc: all processes")
+        } else if self.filter == Filter::Containers {
+            "containers only · c: change · Esc: all processes".to_string()
+        } else {
+            format!("only {name} · c: change · Esc: all processes")
+        })
+    }
+
     fn visible(&self, p: &ProcInfo) -> bool {
         if p.kthread && !self.show_kernel {
+            return false;
+        }
+        if !self.filter.is_all() && (self.filter_gone || !self.filter.shows(self.placement(p))) {
             return false;
         }
         if self.active_only && !self.activity.contains_key(&p.pid) {
@@ -372,7 +435,18 @@ impl App {
                         rows.push(Row::Proc { info: members[0].clone(), prefix: String::new() });
                         continue;
                     }
-                    rows.push(Row::Group { key, label, kind, count: members.len(), cpu, rss, io, collapsed });
+                    rows.push(Row::Group {
+                        key,
+                        label,
+                        kind,
+                        manager: None,
+                        depth: 0,
+                        count: members.len(),
+                        cpu,
+                        rss,
+                        io,
+                        collapsed,
+                    });
                     if !collapsed {
                         let n = members.len();
                         for (i, p) in members.into_iter().enumerate() {
@@ -382,6 +456,7 @@ impl App {
                     }
                 }
             }
+            View::Containers => self.container_rows(&procs, &mut rows),
             View::Tree => {
                 let present: HashSet<i32> = procs.iter().map(|p| p.pid).collect();
                 let mut children: HashMap<i32, Vec<&ProcInfo>> = HashMap::new();
@@ -433,6 +508,139 @@ impl App {
             .unwrap_or(0)
             .min(self.rows.len().saturating_sub(1));
         self.table.select(Some(idx));
+    }
+
+    /// Rows for the containers view: each Compose project or pod with its
+    /// totals, its containers inside it (a service's replicas side by side),
+    /// then standalone containers, then everything outside containers.
+    fn container_rows(&self, procs: &[&ProcInfo], rows: &mut Vec<Row>) {
+        struct Agg<'a> {
+            key: String,
+            label: String,
+            order: Arc<str>,
+            procs: Vec<&'a ProcInfo>,
+        }
+        type Top<'a> = (Option<(String, String, GroupKind)>, Vec<Agg<'a>>);
+        let mut tops: Vec<Top> = Vec::new();
+        let mut top_index: HashMap<String, usize> = HashMap::new();
+        let mut host: Vec<&ProcInfo> = Vec::new();
+        for p in procs {
+            let Some(pl) = self.placement(p) else {
+                host.push(p);
+                continue;
+            };
+            let tkey = pl.group.as_ref().map_or_else(|| format!("c{}", pl.key), |g| format!("g{}", g.key));
+            let ti = *top_index.entry(tkey.clone()).or_insert_with(|| {
+                let g = pl.group.as_ref().map(|g| (tkey.clone(), g.label.to_string(), g.kind));
+                tops.push((g, Vec::new()));
+                tops.len() - 1
+            });
+            let members = &mut tops[ti].1;
+            let ckey = format!("c{}", pl.key);
+            match members.iter_mut().find(|a| a.key == ckey) {
+                Some(a) => a.procs.push(p),
+                None => {
+                    members.push(Agg { key: ckey, label: pl.name.to_string(), order: pl.order.clone(), procs: vec![p] })
+                }
+            }
+        }
+        let totals = |ps: &mut dyn Iterator<Item = &&ProcInfo>| {
+            ps.fold((0usize, 0.0f32, 0u64, (0.0, 0.0)), |(n, c, m, io), p| {
+                let pio = p.io.map_or((0.0, 0.0), |x| (x.read_rate, x.write_rate));
+                (n + 1, c + p.cpu, m + p.rss, (io.0 + pio.0, io.1 + pio.1))
+            })
+        };
+        let rank = |t: &(usize, f32, u64, (f64, f64)), label: &str| -> (f64, String) {
+            match self.sort {
+                Sort::Cpu => (-(t.1 as f64), label.to_lowercase()),
+                Sort::Mem => (-(t.2 as f64), label.to_lowercase()),
+                Sort::Io => (-(t.3.0 + t.3.1), label.to_lowercase()),
+                Sort::Pid | Sort::Name => (0.0, label.to_lowercase()),
+            }
+        };
+        let mut tops: Vec<_> = tops
+            .into_iter()
+            .map(|(g, mut members)| {
+                members.sort_by(|a, b| a.order.cmp(&b.order));
+                let t = totals(&mut members.iter().flat_map(|a| a.procs.iter()));
+                (g, members, t)
+            })
+            .collect();
+        tops.sort_by(|a, b| {
+            let la = a.0.as_ref().map_or(a.1[0].label.as_str(), |g| g.1.as_str());
+            let lb = b.0.as_ref().map_or(b.1[0].label.as_str(), |g| g.1.as_str());
+            rank(&a.2, la).partial_cmp(&rank(&b.2, lb)).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let push_procs = |rows: &mut Vec<Row>, ps: &[&ProcInfo], indent: &str| {
+            for (i, p) in ps.iter().enumerate() {
+                let branch = if i + 1 == ps.len() { "└─ " } else { "├─ " };
+                rows.push(Row::Proc { info: (*p).clone(), prefix: format!("{indent}{branch}") });
+            }
+        };
+        let container = |rows: &mut Vec<Row>, a: &Agg, depth: u8| {
+            let (count, cpu, rss, io) = totals(&mut a.procs.iter());
+            let collapsed = self.collapsed.contains(&a.key);
+            rows.push(Row::Group {
+                key: a.key.clone(),
+                label: a.label.clone(),
+                kind: Some(ServiceKind::Container),
+                manager: None,
+                depth,
+                count,
+                cpu,
+                rss,
+                io,
+                collapsed,
+            });
+            if !collapsed {
+                push_procs(rows, &a.procs, if depth > 0 { "   " } else { "" });
+            }
+        };
+        for (g, members, (count, cpu, rss, io)) in &tops {
+            match g {
+                Some((key, label, kind)) => {
+                    let collapsed = self.collapsed.contains(key);
+                    rows.push(Row::Group {
+                        key: key.clone(),
+                        label: label.clone(),
+                        kind: None,
+                        manager: Some(*kind),
+                        depth: 0,
+                        count: *count,
+                        cpu: *cpu,
+                        rss: *rss,
+                        io: *io,
+                        collapsed,
+                    });
+                    if !collapsed {
+                        for a in members {
+                            container(rows, a, 1);
+                        }
+                    }
+                }
+                None => container(rows, &members[0], 0),
+            }
+        }
+        if !host.is_empty() {
+            let key = "host".to_string();
+            let (count, cpu, rss, io) = totals(&mut host.iter());
+            let collapsed = self.collapsed.contains(&key);
+            rows.push(Row::Group {
+                key,
+                label: "not in a container".into(),
+                kind: None,
+                manager: None,
+                depth: 0,
+                count,
+                cpu,
+                rss,
+                io,
+                collapsed,
+            });
+            if !collapsed {
+                push_procs(rows, &host, "");
+            }
+        }
     }
 
     fn remember_selection(&mut self) {
@@ -646,6 +854,7 @@ impl App {
                 _ => self.mode = Mode::ConfirmTyped(p, typed),
             },
             Mode::Help => {}
+            Mode::Containers(i) => self.on_picker_key(key, i),
             Mode::Normal => self.on_normal_key(key),
         }
     }
@@ -657,6 +866,11 @@ impl App {
             KeyCode::Esc if !self.query.is_empty() => {
                 self.query.clear();
                 self.rebuild();
+            }
+            KeyCode::Esc if !self.filter.is_all() => self.choose(Filter::All),
+            KeyCode::Char('c') if !self.choices.is_empty() || !self.filter.is_all() => {
+                let at = self.choices.iter().position(|c| c.filter == self.filter).unwrap_or(0);
+                self.mode = Mode::Containers(at);
             }
             KeyCode::Char('/') => self.mode = Mode::Search,
             KeyCode::Char('?') | KeyCode::F(1) => self.mode = Mode::Help,
@@ -673,7 +887,7 @@ impl App {
             },
             KeyCode::Char(' ') => self.toggle_collapse(),
             KeyCode::Char('v') => {
-                self.view = self.view.next();
+                self.view = self.view.next(!self.choices.is_empty());
                 self.rebuild();
                 self.set_status(format!("View: {}", self.view.name()));
             }
@@ -682,6 +896,7 @@ impl App {
             KeyCode::Char('3') => self.switch_view(View::Service),
             KeyCode::Char('4') => self.switch_view(View::Parent),
             KeyCode::Char('5') => self.switch_view(View::Tree),
+            KeyCode::Char('6') if !self.choices.is_empty() => self.switch_view(View::Containers),
             KeyCode::Char('s') => {
                 self.sort = self.sort.next();
                 self.rebuild();
@@ -717,6 +932,43 @@ impl App {
             KeyCode::Char('x') => self.request_signal(Signal::Kill, self.selected().cloned()),
             _ => {}
         }
+    }
+
+    fn on_picker_key(&mut self, key: KeyEvent, at: usize) {
+        let last = self.choices.len().saturating_sub(1);
+        let at = at.min(last);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('c') => {}
+            KeyCode::Char('q') => self.quit = true,
+            KeyCode::Up | KeyCode::Char('k') => self.mode = Mode::Containers(at.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => self.mode = Mode::Containers((at + 1).min(last)),
+            KeyCode::Home | KeyCode::Char('g') => self.mode = Mode::Containers(0),
+            KeyCode::End | KeyCode::Char('G') => self.mode = Mode::Containers(last),
+            KeyCode::Enter => match self.choices.get(at) {
+                Some(c) => self.choose(c.filter.clone()),
+                // No containers left: back to everything.
+                None => self.choose(Filter::All),
+            },
+            _ => self.mode = Mode::Containers(at),
+        }
+    }
+
+    /// Limit the view to a picker entry. All containers and a project or pod
+    /// switch to the containers view, where their structure shows; one
+    /// container keeps the current view.
+    pub fn choose(&mut self, f: Filter) {
+        if matches!(f, Filter::Containers | Filter::Group(_)) {
+            self.view = View::Containers;
+        }
+        self.filter = f;
+        self.filter_gone = false;
+        if self.choices.is_empty() && self.view == View::Containers && self.filter.is_all() {
+            self.view = View::List;
+        }
+        self.table.select(Some(0));
+        self.rebuild();
+        let what = containers::filter_label(&self.filter, &self.choices);
+        self.set_status(format!("Showing {what}"));
     }
 
     fn switch_view(&mut self, v: View) {
@@ -770,7 +1022,12 @@ mod tests {
             memory: Some(piddle_core::sampler::Memory { total: 1 << 30, used: 0 }),
             sample_cost: Duration::ZERO,
             self_pid: 99_999,
+            containers: Default::default(),
         }
+    }
+
+    fn snap_with_containers(procs: Vec<ProcInfo>, inv: containers::Inventory) -> Snapshot {
+        Snapshot { containers: Arc::new(inv), ..snap(procs) }
     }
 
     fn app_with(procs: Vec<ProcInfo>) -> App {
@@ -806,6 +1063,100 @@ mod tests {
     fn in_service(mut p: ProcInfo, path: &str) -> ProcInfo {
         p.service = Arc::new(piddle_core::service::classify(path, &HashMap::new(), 1000));
         p
+    }
+
+    fn docker_id(c: char) -> String {
+        c.to_string().repeat(64)
+    }
+
+    fn container_procs() -> (Vec<ProcInfo>, containers::Inventory) {
+        use piddle_core::containers::{Access, Container, Inventory, Manager, Runtime};
+        let d = |c| format!("/system.slice/docker-{}.scope", docker_id(c));
+        let procs = vec![
+            in_service(proc(1, 0, "init", 0.0), "/init.scope"),
+            in_service(proc(10, 1, "nginx", 5.0), &d('a')),
+            in_service(proc(11, 10, "nginx-worker", 1.0), &d('a')),
+            in_service(proc(20, 1, "postgres", 2.0), &d('b')),
+            in_service(proc(30, 1, "redis", 0.0), &d('c')),
+        ];
+        let mut inv = Inventory::default();
+        let compose = |s: &str| Manager::Compose { project: "shop".into(), service: s.into() };
+        for (c, name, manager) in
+            [('a', "shop-web-1", compose("web")), ('b', "shop-db-1", compose("db")), ('c', "cache", Manager::None)]
+        {
+            let id: Arc<str> = docker_id(c).into();
+            inv.containers.insert(
+                id.clone(),
+                Container { runtime: Runtime::Docker, id, name: name.into(), image: "i".into(), manager },
+            );
+        }
+        inv.access.insert(Runtime::Docker, Access::Listed(3));
+        (procs, inv)
+    }
+
+    #[test]
+    fn no_containers_no_picker() {
+        let mut app = app_with(vec![proc(1, 0, "init", 0.0)]);
+        assert!(app.choices.is_empty());
+        app.on_key(key(KeyCode::Char('c')));
+        assert!(matches!(app.mode, Mode::Normal), "c does nothing without containers");
+        app.on_key(key(KeyCode::Char('6')));
+        assert_eq!(app.view, View::List);
+        for _ in 0..6 {
+            app.on_key(key(KeyCode::Char('v')));
+            assert_ne!(app.view, View::Containers);
+        }
+    }
+
+    #[test]
+    fn containers_view_nests_projects_and_filters() {
+        let (procs, inv) = container_procs();
+        let mut app = App::new(Control::new(1000));
+        app.apply(snap_with_containers(procs.clone(), inv.clone()));
+        app.switch_view(View::Containers);
+        // Project (with totals), its containers, the standalone one, then the host.
+        let head: Vec<String> = app
+            .rows
+            .iter()
+            .filter_map(|r| match r {
+                Row::Group { label, depth, count, .. } => {
+                    Some(format!("{}{label} ×{count}", "  ".repeat(*depth as usize)))
+                }
+                Row::Proc { .. } => None,
+            })
+            .collect();
+        assert_eq!(head, ["shop ×3", "  shop-db-1 ×1", "  shop-web-1 ×2", "cache ×1", "not in a container ×1"]);
+
+        // The picker: choosing the project limits the view to it.
+        app.on_key(key(KeyCode::Char('c')));
+        assert!(matches!(app.mode, Mode::Containers(0)));
+        app.on_key(KeyEvent::from(KeyCode::Down));
+        app.on_key(KeyEvent::from(KeyCode::Down));
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(app.filter, Filter::Group(_)));
+        assert_eq!(
+            names(&app),
+            ["[shop ×3]", "[shop-db-1 ×1]", "   └─ postgres", "[shop-web-1 ×2]", "   ├─ nginx", "   └─ nginx-worker"]
+        );
+
+        // One container keeps the current view; in the list, just its processes.
+        app.switch_view(View::List);
+        let web = app.choices.iter().find(|c| c.label == "shop-web-1").unwrap().filter.clone();
+        app.choose(web);
+        assert_eq!(names(&app), ["nginx", "nginx-worker"]);
+
+        // It stops: the view says so, and Esc goes back to everything.
+        app.apply(snap_with_containers(vec![procs[0].clone(), procs[3].clone()], inv.clone()));
+        assert!(app.filter_gone && app.rows.is_empty());
+        assert!(app.filter_text().unwrap().contains("shop-web-1 is no longer running"));
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        assert!(app.filter.is_all() && !app.filter_gone);
+        assert_eq!(app.rows.len(), 2);
+
+        // The last container goes: the containers view falls back to the list.
+        app.switch_view(View::Containers);
+        app.apply(snap_with_containers(vec![procs[0].clone()], inv));
+        assert_eq!(app.view, View::List);
     }
 
     #[test]

@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use crate::containers::{Inventory, Watcher};
 use crate::encode::sanitize;
 use crate::service::{self, Service};
 
@@ -83,6 +84,9 @@ pub struct Snapshot {
     pub memory: Option<Memory>,
     pub sample_cost: Duration,
     pub self_pid: i32,
+    /// Container names and managers, as last listed by the runtimes (empty
+    /// unless [`Sampler::watch_containers`] is on; [`spawn`] turns it on).
+    pub containers: Arc<Inventory>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -163,6 +167,8 @@ pub struct Sampler {
     last: Option<Instant>,
     prev_cpu: (u64, u64),
     self_pid: i32,
+    containers: Option<Watcher>,
+    no_containers: Arc<Inventory>,
 }
 
 /// Check that `/proc` is mounted. PIDdle reads every process from it, so
@@ -195,6 +201,7 @@ pub fn spawn(control: Arc<Control>) -> async_channel::Receiver<Snapshot> {
         .name("piddle-sampler".into())
         .spawn(move || {
             let mut s = Sampler::new();
+            s.watch_containers();
             loop {
                 if !control.paused.load(Ordering::Relaxed) {
                     s.set_collect_io(control.collect_io.load(Ordering::Relaxed));
@@ -246,7 +253,15 @@ impl Sampler {
             last: None,
             prev_cpu: (0, 0),
             self_pid: std::process::id() as i32,
+            containers: None,
+            no_containers: Arc::default(),
         }
+    }
+
+    /// Ask the container runtimes for names while containers are running
+    /// (see [`crate::containers`]); a background thread does the asking.
+    pub fn watch_containers(&mut self) {
+        self.containers.get_or_insert_with(Watcher::spawn);
     }
 
     /// Enable or disable per-process disk I/O collection.
@@ -283,6 +298,13 @@ impl Sampler {
 
         let total_cpu = self.read_total_cpu();
         let memory = read_meminfo(&mut self.buf);
+        let containers = match &mut self.containers {
+            Some(w) => {
+                w.update(&procs);
+                w.current()
+            }
+            None => self.no_containers.clone(),
+        };
 
         Snapshot {
             procs,
@@ -293,6 +315,7 @@ impl Sampler {
             memory,
             sample_cost: t0.elapsed(),
             self_pid: self.self_pid,
+            containers,
         }
     }
 

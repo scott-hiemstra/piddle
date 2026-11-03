@@ -10,3 +10,5 @@ authors.workspace = true
 piddle-encode.workspace = true
 async-channel = "2"
 libc = "0.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"

@@ -4,6 +4,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use piddle_core::actions::{exe_path, fmt_age, state_name};
+use piddle_core::containers::{Filter, GroupKind};
 use piddle_core::encode::{cpu_color, fmt_bytes, fmt_cpu, fmt_rate};
 use piddle_core::logs;
 use piddle_core::net;
@@ -31,6 +32,13 @@ fn kind_color(k: ServiceKind) -> Color {
         ServiceKind::Container => Color::Rgb(240, 130, 205),
         ServiceKind::Kernel | ServiceKind::Other => DIM,
     }
+}
+
+/// Compose project and pod tags in the containers view.
+const MANAGER: Color = Color::Rgb(250, 170, 120);
+
+fn manager_label(k: GroupKind) -> &'static str {
+    k.label()
 }
 
 /// Map an RGB color to what the terminal supports.
@@ -77,7 +85,8 @@ pub fn draw(f: &mut Frame, app: &mut App, pal: &Palette) {
         Mode::Details => draw_details(f, app, pal),
         Mode::Confirm(_) | Mode::ConfirmTyped(..) => draw_confirm(f, app, pal),
         Mode::Logs => draw_logs(f, app, pal),
-        Mode::Help => draw_help(f, pal),
+        Mode::Help => draw_help(f, app, pal),
+        Mode::Containers(at) => draw_picker(f, app, pal, *at),
         _ => {}
     }
 }
@@ -180,9 +189,15 @@ fn draw_table(f: &mut Frame, app: &mut App, pal: &Palette, area: Rect) {
         .rows
         .iter()
         .map(|r| match r {
-            Row::Group { label, kind, count, cpu, rss, io, collapsed, .. } => {
+            Row::Group { label, kind, manager, depth, count, cpu, rss, io, collapsed, .. } => {
                 let c = pal.cpu(*cpu as f64);
-                let mut name = Vec::with_capacity(3);
+                let mut name = Vec::with_capacity(4);
+                if *depth > 0 {
+                    name.push(Span::raw("   ".repeat(*depth as usize)));
+                }
+                if let Some(m) = manager {
+                    name.push(Span::styled(format!("{:<9} ", manager_label(*m)), Style::new().fg(pal.fix(MANAGER))));
+                }
                 if let Some(k) = kind {
                     name.push(Span::styled(format!("{:<9} ", k.label()), Style::new().fg(pal.fix(kind_color(*k)))));
                 }
@@ -234,15 +249,18 @@ fn draw_table(f: &mut Frame, app: &mut App, pal: &Palette, area: Rect) {
         })
         .collect();
 
-    let title = if app.query.is_empty() {
-        Line::from(format!(" {} rows ", app.rows.len()))
-    } else {
-        Line::from(vec![
-            Span::raw(" search: "),
-            Span::styled(app.query.clone(), Style::new().fg(pal.fix(ACCENT)).add_modifier(Modifier::BOLD)),
-            Span::raw(format!(" · {} rows ", app.rows.len())),
-        ])
-    };
+    let mut title = Vec::new();
+    if let Some(t) = app.filter_text() {
+        let color = if app.filter_gone { Color::Rgb(255, 120, 90) } else { kind_color(ServiceKind::Container) };
+        title.push(Span::styled(format!(" {t} ·"), Style::new().fg(pal.fix(color)).add_modifier(Modifier::BOLD)));
+    }
+    if !app.query.is_empty() {
+        title.push(Span::raw(" search: "));
+        title.push(Span::styled(app.query.clone(), Style::new().fg(pal.fix(ACCENT)).add_modifier(Modifier::BOLD)));
+        title.push(Span::raw(" ·"));
+    }
+    title.push(Span::raw(format!(" {} rows ", app.rows.len())));
+    let title = Line::from(title);
     let mut widths = vec![
         Constraint::Length(8),
         Constraint::Fill(1),
@@ -279,7 +297,7 @@ fn draw_footer(f: &mut Frame, app: &App, pal: &Palette, area: Rect) {
     } else if matches!(app.mode, Mode::Search) {
         Line::from(vec![txt(" type to filter · "), key("Enter"), txt(" keep · "), key("Esc"), txt(" clear")])
     } else {
-        Line::from(vec![
+        let mut keys = vec![
             key(" ↑↓"),
             txt(" move  "),
             key("Enter"),
@@ -288,6 +306,12 @@ fn draw_footer(f: &mut Frame, app: &App, pal: &Palette, area: Rect) {
             txt(" search  "),
             key("v"),
             txt(" view  "),
+        ];
+        // Only while there are containers (or the view is still limited to one).
+        if !app.choices.is_empty() || !app.filter.is_all() {
+            keys.extend([key("c"), txt(" containers  ")]);
+        }
+        keys.extend([
             key("s"),
             txt(" sort  "),
             key("t"),
@@ -298,7 +322,8 @@ fn draw_footer(f: &mut Frame, app: &App, pal: &Palette, area: Rect) {
             txt(" help  "),
             key("q"),
             txt(" quit"),
-        ])
+        ]);
+        Line::from(keys)
     };
     f.render_widget(Paragraph::new(line), area);
 }
@@ -394,13 +419,28 @@ fn draw_details(f: &mut Frame, app: &App, pal: &Palette) {
             Span::styled(p.service.describe(), Style::new().fg(pal.fix(kind_color(p.service.kind)))),
         ]),
         Line::from(vec![label("Cgroup"), Span::styled(p.service.path.to_string(), Style::new().fg(pal.fix(DIM)))]),
+    ];
+    if let Some(pl) = app.placement(p) {
+        lines.push(Line::from(vec![
+            label("Container"),
+            Span::styled(pl.name.to_string(), Style::new().fg(pal.fix(kind_color(ServiceKind::Container)))),
+            Span::styled(format!("  {}", pl.detail), Style::new().fg(pal.fix(DIM))),
+        ]));
+        // Unnamed (the runtime couldn't be asked): say why.
+        if Some(&pl.name) == Some(&p.service.label) {
+            for note in s.containers.notes() {
+                lines.push(Line::from(vec![label(""), Span::styled(note, Style::new().fg(pal.fix(DIM)))]));
+            }
+        }
+    }
+    lines.extend([
         Line::from(vec![label("Started"), Span::raw(started)]),
         Line::from(vec![label("Executable"), Span::raw(exe_path(p.pid).unwrap_or_else(|| "not accessible".into()))]),
         Line::from(vec![
             label("Command"),
             Span::raw(if p.cmdline.is_empty() { format!("[{}]", p.name) } else { p.cmdline.to_string() }),
         ]),
-    ];
+    ]);
     if p.kthread {
         lines.push(Line::styled("Kernel thread", Style::new().fg(pal.fix(DIM))));
     }
@@ -613,13 +653,18 @@ fn draw_confirm(f: &mut Frame, app: &App, pal: &Palette) {
     );
 }
 
-fn draw_help(f: &mut Frame, pal: &Palette) {
-    let rows = [
+fn draw_help(f: &mut Frame, app: &App, pal: &Palette) {
+    let containers = !app.choices.is_empty();
+    let mut rows = vec![
         ("↑ ↓ PgUp PgDn Home End", "move"),
         ("Enter", "details (or collapse a group)"),
         ("Space", "collapse / expand group or tree branch"),
         ("/", "search name, command, service or PID; Esc clears"),
-        ("v or 1–5", "view: list, by application, by service, by parent, tree"),
+        if containers {
+            ("v or 1–6", "view: list, by application, by service, by parent, tree, by container")
+        } else {
+            ("v or 1–5", "view: list, by application, by service, by parent, tree")
+        },
         ("s", "sort: CPU, memory, disk I/O, PID, name"),
         ("i", "show / hide disk I/O columns"),
         ("a", "active processes only"),
@@ -631,6 +676,9 @@ fn draw_help(f: &mut Frame, pal: &Palette) {
         ("l (in details)", "journal logs (o: this process only)"),
         ("q, Ctrl+C", "quit"),
     ];
+    if containers {
+        rows.insert(5, ("c", "containers: limit the view to one, or a project or pod; Esc: all"));
+    }
     let mut lines: Vec<Line> = rows
         .iter()
         .map(|(k, d)| {
@@ -653,4 +701,53 @@ fn draw_help(f: &mut Frame, pal: &Palette) {
             .block(popup_block("Keys", pal.fix(ACCENT), pal).padding(ratatui::widgets::Padding::horizontal(1))),
         area,
     );
+}
+
+/// The containers picker: every entry, groups with their containers indented.
+fn draw_picker(f: &mut Frame, app: &App, pal: &Palette, at: usize) {
+    let notes = app.snap.as_ref().map(|s| s.containers.notes()).unwrap_or_default();
+    let full = f.area();
+    let height = (app.choices.len() as u16 + notes.len() as u16 * 2 + 4).clamp(6, full.height.saturating_sub(4));
+    let area = popup(full, 64, height);
+    f.render_widget(Clear, area);
+    let block = popup_block("Containers", pal.fix(kind_color(ServiceKind::Container)), pal)
+        .title_bottom(Line::from(Span::styled(" ↑↓ choose · Enter show · Esc close ", Style::new().fg(pal.fix(DIM)))))
+        .padding(ratatui::widgets::Padding::horizontal(1));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let mut lines: Vec<Line> = Vec::new();
+    if app.choices.is_empty() {
+        lines.push(Line::styled("No containers are running.  Enter: all processes", Style::new().fg(pal.fix(DIM))));
+    }
+    let list_h = (inner.height as usize).saturating_sub(if notes.is_empty() { 0 } else { notes.len() * 2 + 1 }).max(1);
+    let at = at.min(app.choices.len().saturating_sub(1));
+    let start = at.saturating_sub(list_h.saturating_sub(1));
+    for (i, c) in app.choices.iter().enumerate().skip(start).take(list_h) {
+        let current = c.filter == app.filter;
+        let mut spans = vec![Span::raw(if current { "● " } else { "  " }), Span::raw("   ".repeat(c.depth as usize))];
+        let style = match &c.filter {
+            Filter::All | Filter::Containers => Style::new().add_modifier(Modifier::BOLD),
+            Filter::Group(_) => Style::new().fg(pal.fix(MANAGER)).add_modifier(Modifier::BOLD),
+            Filter::Container { .. } => Style::new(),
+        };
+        spans.push(Span::styled(c.label.clone(), style));
+        let n = c.procs;
+        spans.push(Span::styled(
+            format!("  {n} process{}", if n == 1 { "" } else { "es" }),
+            Style::new().fg(pal.fix(DIM)),
+        ));
+        let mut line = Line::from(spans);
+        if i == at {
+            line = line.style(Style::new().bg(pal.fix(SELECT_BG)).add_modifier(Modifier::BOLD));
+        }
+        lines.push(line);
+    }
+    if !notes.is_empty() {
+        lines.push(Line::raw(""));
+        for n in notes {
+            lines.push(Line::styled(n, Style::new().fg(pal.fix(DIM))));
+        }
+    }
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }

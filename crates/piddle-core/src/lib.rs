@@ -12,10 +12,13 @@
 //! * [`logs`] — journal entries for a process's service, via journalctl.
 //! * [`net`] — a process's network connections, looked up on demand.
 //! * [`service`] — which systemd service, scope or container a process is in.
+//! * [`containers`] — container names, Compose projects and pods, from the
+//!   runtimes' read-only APIs, and the containers picker.
 //! * [`GUI_UNAVAILABLE`] — exit code contract between `piddle-gui` and the
 //!   `piddle` launcher.
 
 pub mod actions;
+pub mod containers;
 pub mod logs;
 pub mod net;
 pub mod sampler;

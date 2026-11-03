@@ -5,6 +5,22 @@ the release notes on GitHub, and a release fails if its section is missing.
 
 ## [Unreleased]
 
+### Added
+- Containers view. While containers are running, the TUI's `c` key opens a
+  picker that limits the view to all containers, one Compose project or pod,
+  or one container; Esc goes back to all processes. A new "by container"
+  view (`6`) groups processes by Compose project, Podman pod or Kubernetes
+  pod, then by container, with totals for each, and a service's replicas
+  side by side. Without containers, neither the key nor the view appears.
+  If the container being viewed stops, the view says so; one recreated under
+  the same name (`docker compose up`) is followed to its new ID.
+- Container names, Compose projects and services, and Podman pods come from
+  the Docker or Podman API socket, through read-only list calls only, and
+  only while containers of that runtime are running. Without access (Docker's
+  socket is for root and the `docker` group) containers keep their short IDs
+  and the picker and details say why. The details show each process's
+  container, what manages it and its image.
+
 ### Changed
 - `scripts/use-local-common.sh` is now a thin wrapper around piddle-common's
   own copy, the only one; it finds the checkout via a path after `on`,

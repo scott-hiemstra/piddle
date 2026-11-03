@@ -57,6 +57,22 @@ pub struct Service {
     pub path: Arc<str>,
     /// Lowercased label + unit, for search.
     pub search: Box<str>,
+    /// For containers: which one, as the cgroup names it.
+    pub container: Option<ContainerRef>,
+}
+
+/// A container as its cgroup identifies it, for matching against the
+/// runtime's own list (see [`crate::containers`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContainerRef {
+    /// "docker", "podman", "containerd", "cri-o", "k8s", "lxc", "nspawn",
+    /// "machine".
+    pub runtime: &'static str,
+    /// The full ID (Docker, Podman, CRI runtimes) or the name (LXC, nspawn,
+    /// libvirt), lowercase and sanitized.
+    pub id: Arc<str>,
+    /// Kubernetes pod UID, from the `pod<uid>` cgroup, with dashes.
+    pub pod: Option<Arc<str>>,
 }
 
 impl Service {
@@ -93,6 +109,7 @@ impl Service {
             uid: None,
             path: path.into(),
             search: label.to_lowercase().into(),
+            container: None,
         }
     }
 }
@@ -133,8 +150,9 @@ pub fn classify(path: &str, users: &HashMap<u32, Arc<str>>, viewer_uid: u32) -> 
         if let Some(u) = c.strip_prefix("user-").and_then(|r| r.strip_suffix(".slice")) {
             uid = u.parse().ok();
         }
-        if let Some((runtime, name)) = container(&comps, i) {
+        if let Some((runtime, id, name)) = container(&comps, i) {
             let label = sanitize(&format!("{runtime} {name}"));
+            let pod = kube_pod(&comps[..i]).map(|p| Arc::from(sanitize(&p)));
             let unit = (c.ends_with(".scope") || c.ends_with(".service")).then(|| Arc::from(sanitize(c)));
             return Service {
                 kind: ServiceKind::Container,
@@ -145,6 +163,7 @@ pub fn classify(path: &str, users: &HashMap<u32, Arc<str>>, viewer_uid: u32) -> 
                 unit,
                 uid,
                 path: path_clean.into(),
+                container: Some(ContainerRef { runtime, id: sanitize(&id).into(), pod }),
             };
         }
         if c.starts_with("user@") && c.ends_with(".service") {
@@ -167,6 +186,7 @@ pub fn classify(path: &str, users: &HashMap<u32, Arc<str>>, viewer_uid: u32) -> 
             user_unit: false,
             uid,
             path: path_clean.into(),
+            container: None,
         };
     }
 
@@ -206,56 +226,65 @@ pub fn classify(path: &str, users: &HashMap<u32, Arc<str>>, viewer_uid: u32) -> 
         user_unit,
         uid,
         path: path_clean.into(),
+        container: None,
     }
 }
 
-/// Recognize a container cgroup at component `i`; returns (runtime, short name).
-fn container(comps: &[&str], i: usize) -> Option<(&'static str, String)> {
+/// Recognize a container cgroup at component `i`; returns (runtime, full
+/// ID or name, short display name).
+fn container(comps: &[&str], i: usize) -> Option<(&'static str, String, String)> {
     let c = comps[i];
     let prev = if i > 0 { comps[i - 1] } else { "" };
     let kube = comps[..i].iter().any(|p| p.starts_with("kubepods"));
-    let scope_id = |prefix: &str| c.strip_prefix(prefix).and_then(|r| r.strip_suffix(".scope")).map(short_id);
+    let scope_id = |prefix: &str| {
+        c.strip_prefix(prefix).and_then(|r| r.strip_suffix(".scope")).map(|id| (id.to_ascii_lowercase(), short_id(id)))
+    };
+    let named = |name: String| Some((name.clone(), name));
 
-    if let Some(id) = scope_id("docker-") {
-        return Some((if kube { "k8s" } else { "docker" }, id));
-    }
-    if !c.starts_with("libpod-conmon-")
+    let found = if let Some(id) = scope_id("docker-") {
+        Some((if kube { "k8s" } else { "docker" }, id))
+    } else if !c.starts_with("libpod-conmon-")
         && let Some(id) = scope_id("libpod-")
     {
-        return Some(("podman", id));
-    }
-    if let Some(id) = scope_id("cri-containerd-") {
-        return Some((if kube { "k8s" } else { "containerd" }, id));
-    }
-    if !c.starts_with("crio-conmon-")
+        Some(("podman", id))
+    } else if let Some(id) = scope_id("cri-containerd-") {
+        Some((if kube { "k8s" } else { "containerd" }, id))
+    } else if !c.starts_with("crio-conmon-")
         && let Some(id) = scope_id("crio-")
     {
-        return Some((if kube { "k8s" } else { "cri-o" }, id));
-    }
-    // cgroupfs drivers: /docker/<id>, /kubepods/<qos>/pod<uid>/<id>
-    if is_hex_id(c) {
-        if prev == "docker" {
-            return Some(("docker", short_id(c)));
-        }
-        if kube && prev.starts_with("pod") {
-            return Some(("k8s", short_id(c)));
-        }
-    }
-    if let Some(name) = c.strip_prefix("lxc.payload.") {
-        return Some(("lxc", unescape(name)));
-    }
-    if prev == "lxc" && i == 1 {
-        return Some(("lxc", unescape(c)));
-    }
-    if let Some(name) = c.strip_prefix("systemd-nspawn@").and_then(|r| r.strip_suffix(".service")) {
-        return Some(("nspawn", unescape(name)));
-    }
-    if prev == "machine.slice"
+        Some((if kube { "k8s" } else { "cri-o" }, id))
+    } else if is_hex_id(c) && (prev == "docker" || (kube && prev.starts_with("pod"))) {
+        // cgroupfs drivers: /docker/<id>, /kubepods/<qos>/pod<uid>/<id>
+        Some((if prev == "docker" { "docker" } else { "k8s" }, (c.to_ascii_lowercase(), short_id(c))))
+    } else if let Some(name) = c.strip_prefix("lxc.payload.") {
+        Some(("lxc", named(unescape(name))?))
+    } else if prev == "lxc" && i == 1 {
+        Some(("lxc", named(unescape(c))?))
+    } else if let Some(name) = c.strip_prefix("systemd-nspawn@").and_then(|r| r.strip_suffix(".service")) {
+        Some(("nspawn", named(unescape(name))?))
+    } else if prev == "machine.slice"
         && let Some(name) = c.strip_prefix("machine-").and_then(|r| r.strip_suffix(".scope"))
     {
-        return Some(("machine", unescape(name)));
+        Some(("machine", named(unescape(name))?))
+    } else {
+        None
+    };
+    found.map(|(runtime, (id, short))| (runtime, id, short))
+}
+
+/// The Kubernetes pod UID in the cgroups above a container: `pod<uid>`
+/// (cgroupfs driver) or `kubepods-<qos>-pod<uid>.slice` (systemd driver,
+/// which writes the UID's dashes as underscores).
+fn kube_pod(above: &[&str]) -> Option<String> {
+    if !above.iter().any(|p| p.starts_with("kubepods")) {
+        return None;
     }
-    None
+    above.iter().rev().find_map(|c| {
+        let stem = c.strip_suffix(".slice").unwrap_or(c);
+        let uid = stem.rsplit_once("-pod").map(|(_, u)| u).or_else(|| stem.strip_prefix("pod"))?;
+        let uid = uid.replace('_', "-");
+        (!uid.is_empty() && uid.bytes().all(|b| b == b'-' || b.is_ascii_hexdigit())).then_some(uid)
+    })
 }
 
 fn is_hex_id(s: &str) -> bool {
@@ -389,15 +418,37 @@ mod tests {
             "/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod1234.slice/cri-containerd-{id}.scope"
         );
         assert_eq!(&*c(&k).label, "k8s 4f1c0e2a9b7d");
+        let r = c(&k).container.unwrap();
+        assert_eq!((r.runtime, &*r.id, r.pod.as_deref()), ("k8s", &*id, Some("1234")));
         assert_eq!(&*c(&format!("/kubepods/burstable/pod1234/{id}")).label, "k8s 4f1c0e2a9b7d");
         let p = format!("/user.slice/user-1000.slice/user@1000.service/user.slice/libpod-{id}.scope");
         let s = c(&p);
         assert_eq!((s.kind, &*s.label, s.user_unit), (ServiceKind::Container, "podman 4f1c0e2a9b7d", true));
+        let r = c(&p).container.unwrap();
+        assert_eq!((r.runtime, &*r.id, r.pod), ("podman", &*id, None));
         assert_eq!(&*c("/lxc.payload.web1").label, "lxc web1");
+        assert_eq!(&*c("/lxc.payload.web1").container.unwrap().id, "web1");
         assert_eq!(&*c("/machine.slice/systemd-nspawn@deb.service").label, "nspawn deb");
         assert_eq!(&*c("/machine.slice/machine-qemu\\x2d1\\x2dwin11.scope").label, "machine qemu-1-win11");
         // The daemons themselves are ordinary services.
         assert_eq!(c("/system.slice/docker.service").kind, ServiceKind::System);
+        assert_eq!(c("/system.slice/docker.service").container, None);
+    }
+
+    #[test]
+    fn kubernetes_pod_uids() {
+        let id = "ab".repeat(32);
+        let uid = "5f0c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
+        let systemd = format!(
+            "/kubepods.slice/kubepods-besteffort.slice/kubepods-besteffort-pod{}.slice/cri-containerd-{id}.scope",
+            uid.replace('-', "_")
+        );
+        let guaranteed =
+            format!("/kubepods.slice/kubepods-pod{}.slice/cri-containerd-{id}.scope", uid.replace('-', "_"));
+        let cgroupfs = format!("/kubepods/burstable/pod{uid}/{id}");
+        for path in [systemd, guaranteed, cgroupfs] {
+            assert_eq!(c(&path).container.unwrap().pod.as_deref(), Some(uid), "{path}");
+        }
     }
 
     #[test]

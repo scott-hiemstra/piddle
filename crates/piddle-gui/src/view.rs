@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use gtk::prelude::*;
 use gtk::{gsk, pango};
 
+use piddle_core::containers::{self, Choice, Filter, Inventory, Placement};
 use piddle_core::encode::{Rgb, cpu_color, fmt_bytes, fmt_cpu, mem_radius, mix};
 use piddle_core::sampler::{Memory, ProcInfo, Snapshot};
 use piddle_core::service::ServiceKind;
@@ -24,18 +25,20 @@ pub enum Layout {
     Service,
     Parent,
     Tree,
+    /// One hull per container; offered only while containers run.
+    Containers,
 }
 
 impl Layout {
     /// Layouts that pull bubbles into clusters with a shared hull.
     fn grouped(self) -> bool {
-        matches!(self, Layout::App | Layout::Service | Layout::Parent)
+        matches!(self, Layout::App | Layout::Service | Layout::Parent | Layout::Containers)
     }
 
     fn arrangement(self) -> Arrangement {
         match self {
             Layout::Free => Arrangement::Free,
-            Layout::App | Layout::Service | Layout::Parent => Arrangement::Grouped,
+            Layout::App | Layout::Service | Layout::Parent | Layout::Containers => Arrangement::Grouped,
             Layout::Tree => Arrangement::Tree,
         }
     }
@@ -52,6 +55,9 @@ fn kind_tint(kind: Option<ServiceKind>) -> (f64, f64, f64) {
     }
 }
 
+/// Outer hulls of Compose projects and pods, apart from the container tint.
+const MANAGER_TINT: (f64, f64, f64) = (0.98, 0.67, 0.47);
+
 /// A process counts as "active" if it used at least this much CPU recently.
 const ACTIVE_CPU: f32 = 0.5;
 const ACTIVE_HOLD: Duration = Duration::from_secs(4);
@@ -59,12 +65,16 @@ const ACTIVE_HOLD: Duration = Duration::from_secs(4);
 /// A process as a bubble.
 pub struct Proc {
     pub info: ProcInfo,
+    /// Its container, if it is in one.
+    pub container: Option<Arc<Placement>>,
 }
 
 #[derive(Clone)]
 pub struct GroupInfo {
     label: String,
     kind: Option<ServiceKind>,
+    /// The Compose project or pod, in the containers layout.
+    cluster: Option<Arc<str>>,
 }
 
 pub struct LabelCache {
@@ -127,11 +137,23 @@ pub struct View {
     pub meta: Meta,
     last_procs: Vec<ProcInfo>,
     pub top: Vec<(Arc<str>, i32, f32)>,
+    /// What the containers picker limits the view to.
+    pub filter: Filter,
+    /// The picker's entries; empty when no process is in a container.
+    pub choices: Vec<Choice>,
+    /// The filter's container or project is gone.
+    pub filter_gone: bool,
+    pub inventory: Arc<Inventory>,
+    /// Each service's container placement, for the last sample.
+    placed: HashMap<usize, Option<Arc<Placement>>>,
+    /// Compose projects and pods by key, for the outer hulls' labels.
+    cluster_groups: HashMap<Arc<str>, containers::Group>,
 }
 
 /// A process's group in a layout.
-fn group_of(layout: Layout, names: &HashMap<i32, Arc<str>>, p: &Proc) -> GroupSpec<GroupInfo> {
-    let p = &p.info;
+fn group_of(layout: Layout, names: &HashMap<i32, Arc<str>>, item: &Proc) -> GroupSpec<GroupInfo> {
+    let p = &item.info;
+    let mut cluster = None;
     let (key, label, kind) = match layout {
         Layout::App => (p.app.clone(), p.app.to_string(), None),
         Layout::Service => {
@@ -147,15 +169,33 @@ fn group_of(layout: Layout, names: &HashMap<i32, Arc<str>>, p: &Proc) -> GroupSp
             };
             (Arc::from(pp.to_string()), label, None)
         }
+        Layout::Containers => match &item.container {
+            Some(c) => {
+                // A Compose project's or pod's containers share an outer hull.
+                cluster = c.group.as_ref().map(|g| g.key.clone());
+                // Inside its project's hull, "shop-web-1" reads as "web-1".
+                let name = c
+                    .group
+                    .as_ref()
+                    .and_then(|g| c.name.strip_prefix(&*g.label))
+                    .and_then(|rest| rest.strip_prefix(['-', '_']))
+                    .filter(|rest| !rest.is_empty())
+                    .unwrap_or(&c.name);
+                (c.key.clone(), name.to_string(), Some(ServiceKind::Container))
+            }
+            None => (Arc::from("host"), "not in a container".to_string(), None),
+        },
         Layout::Free | Layout::Tree => (Arc::from(""), String::new(), None),
     };
-    GroupSpec { key, info: GroupInfo { label, kind } }
+    GroupSpec { key, info: GroupInfo { label, kind, cluster } }
 }
 
 impl View {
     pub fn new() -> Self {
+        let mut scene = Scene::new();
+        scene.set_cluster_of(Some(|g: &GroupInfo| g.cluster.clone()));
         Self {
-            scene: Scene::new(),
+            scene,
             activity: HashMap::new(),
             names: HashMap::new(),
             layout: Layout::Free,
@@ -165,7 +205,40 @@ impl View {
             meta: Meta::default(),
             last_procs: Vec::new(),
             top: Vec::new(),
+            filter: Filter::All,
+            choices: Vec::new(),
+            filter_gone: false,
+            inventory: Arc::default(),
+            placed: HashMap::new(),
+            cluster_groups: HashMap::new(),
         }
+    }
+
+    /// The container a process is in, as of the last sample.
+    pub fn placement(&self, p: &ProcInfo) -> Option<Arc<Placement>> {
+        self.placed.get(&(Arc::as_ptr(&p.service) as usize))?.clone()
+    }
+
+    /// Limit the view to a picker entry.
+    pub fn set_filter(&mut self, f: Filter) {
+        self.filter = f;
+        self.filter_gone = false;
+        self.sync_bubbles();
+    }
+
+    /// How the view is limited, for the banner: (text, gone).
+    pub fn filter_text(&self) -> Option<(String, bool)> {
+        if self.filter.is_all() {
+            return None;
+        }
+        let name = containers::filter_label(&self.filter, &self.choices);
+        Some(if self.filter_gone {
+            (format!("{name} is no longer running"), true)
+        } else if self.filter == Filter::Containers {
+            ("Containers only".to_string(), false)
+        } else {
+            (format!("Only {name}"), false)
+        })
     }
 
     /// Current world→screen scale, used by the legend to draw true-size references.
@@ -216,6 +289,22 @@ impl View {
         top.truncate(6);
         self.top = top;
 
+        self.placed.clear();
+        for p in &snap.procs {
+            let k = Arc::as_ptr(&p.service) as usize;
+            self.placed.entry(k).or_insert_with(|| containers::place(&p.service, &snap.containers).map(Arc::new));
+        }
+        self.cluster_groups =
+            self.placed.values().filter_map(|p| p.as_ref()?.group.clone()).map(|g| (g.key.clone(), g)).collect();
+        self.choices = containers::choices(&snap.procs, &snap.containers);
+        match containers::resolve(&self.filter, &self.choices) {
+            Some(f) => {
+                self.filter = f;
+                self.filter_gone = false;
+            }
+            None => self.filter_gone = true,
+        }
+        self.inventory = snap.containers;
         self.last_procs = snap.procs;
         self.sync_bubbles();
     }
@@ -227,7 +316,8 @@ impl View {
             .iter()
             .filter(|p| self.show_kernel || !p.kthread)
             .filter(|p| !self.active_only || self.activity.contains_key(&p.pid))
-            .map(|p| Proc { info: p.clone() })
+            .map(|p| Proc { info: p.clone(), container: self.placement(p) })
+            .filter(|p| self.filter.is_all() || (!self.filter_gone && self.filter.shows(p.container.as_deref())))
             .collect();
         let (layout, names) = (self.layout, &self.names);
         self.scene.sync(items, |p| group_of(layout, names, p));
@@ -297,7 +387,13 @@ impl View {
         );
 
         if self.scene.bubbles.is_empty() {
-            let l = layout(pctx, "Sampling /proc…", 15.0, false);
+            let msg = match self.filter_text() {
+                // The banner over the canvas says what happened.
+                Some((_, true)) => return,
+                _ if self.last_procs.is_empty() => "Sampling /proc…",
+                _ => "No processes to show",
+            };
+            let l = layout(pctx, msg, 15.0, false);
             let (lw, lh) = l.pixel_size();
             text(snap, &l, (w - lw as f64) / 2.0, (h - lh as f64) / 2.0, rgba(1.0, 1.0, 1.0, 0.5));
             return;
@@ -306,11 +402,25 @@ impl View {
         let s = self.scene.scale();
         let dimming = self.has_query();
 
+        // Compose projects and pods: an outer hull around their containers.
+        if self.layout == Layout::Containers && !self.scene.clusters.is_empty() {
+            let pb = gsk::PathBuilder::new();
+            for c in self.scene.clusters.iter().filter(|c| c.members > 0) {
+                let (cx, cy) = self.scene.to_screen(c.cx, c.cy);
+                pb.add_circle(&point(cx, cy), (c.hull * s) as f32);
+            }
+            let path = pb.to_path();
+            let (r, g, b) = MANAGER_TINT;
+            snap.append_fill(&path, gsk::FillRule::Winding, &rgba(r, g, b, 0.035));
+            snap.append_stroke(&path, &gsk::Stroke::new(1.5), &rgba(r, g, b, 0.4));
+        }
+
         // Group hulls.
         if self.layout.grouped() {
             // One batched path per tint (service kinds differ; other layouts use one).
             let mut paths: Vec<(Option<ServiceKind>, gsk::PathBuilder)> = Vec::new();
-            for g in self.scene.groups.iter().filter(|g| g.members >= 2) {
+            let min = self.min_hull_members();
+            for g in self.scene.groups.iter().filter(|g| g.members >= min) {
                 let (gx, gy) = self.scene.to_screen(g.cx, g.cy);
                 let pb = match paths.iter().position(|(k, _)| *k == g.info.kind) {
                     Some(i) => &paths[i].1,
@@ -425,6 +535,9 @@ impl View {
         if self.layout.grouped() {
             self.draw_group_labels(snap, pctx);
         }
+        if self.layout == Layout::Containers {
+            self.draw_cluster_labels(snap, pctx);
+        }
         if self.layout == Layout::Tree {
             self.draw_hub_labels(snap, pctx);
         }
@@ -467,22 +580,72 @@ impl View {
         }
     }
 
+    /// Compose project and pod names, under their outer hulls (the
+    /// containers' own labels sit at the top of theirs).
+    fn draw_cluster_labels(&self, snap: &gtk::Snapshot, pctx: &pango::Context) {
+        let s = self.scene.scale();
+        let h = self.scene.size.1;
+        for c in self.scene.clusters.iter().filter(|c| c.members > 0) {
+            let Some(g) = self.cluster_groups.get(&c.key) else { continue };
+            let (cx, cy) = self.scene.to_screen(c.cx, c.cy);
+            let cr = c.hull * s;
+            let markup = format!(
+                "<b>{}</b>  <span alpha='65%'>{} · {} container{} · {} · {}</span>",
+                glib_escape(&g.label),
+                g.kind.label(),
+                c.groups,
+                if c.groups == 1 { "" } else { "s" },
+                fmt_cpu(c.cpu),
+                fmt_bytes(c.mem)
+            );
+            let l = pango::Layout::new(pctx);
+            l.set_font_description(Some(&font(11.5, false)));
+            l.set_markup(&markup);
+            l.set_width((cr.max(80.0) * 2.0 * pango::SCALE as f64) as i32);
+            l.set_ellipsize(pango::EllipsizeMode::End);
+            let (lw, lh) = l.pixel_size();
+            let (lw, lh) = (lw as f64, lh as f64);
+            let (w, _) = self.scene.size;
+            let x = (cx - lw / 2.0).clamp(12.0, (w - lw - 12.0).max(12.0));
+            let y = (cy + cr - lh / 2.0).min(h - lh - 6.0);
+            let (r, gg, b) = MANAGER_TINT;
+            card(snap, x - 9.0, y - 3.0, lw + 18.0, lh + 6.0, (lh + 6.0) / 2.0, rgba(0.09, 0.105, 0.14, 0.94), {
+                rgba(r, gg, b, 0.6)
+            });
+            text(snap, &l, x, y, rgba(0.95, 0.9, 0.85, 0.98));
+        }
+    }
+
+    /// Groups with fewer members get no hull: a lone process needs none,
+    /// except in the containers layout, where every container is outlined.
+    fn min_hull_members(&self) -> usize {
+        if self.layout == Layout::Containers { 1 } else { 2 }
+    }
+
     fn draw_group_labels(&self, snap: &gtk::Snapshot, pctx: &pango::Context) {
         let s = self.scene.scale();
-        for g in self.scene.groups.iter().filter(|g| g.members >= 2) {
+        let min = self.min_hull_members();
+        for g in self.scene.groups.iter().filter(|g| g.members >= min) {
             let (gx, gy) = self.scene.to_screen(g.cx, g.cy);
             let gr = g.hull * s;
-            if gr < 30.0 {
+            // Containers are named however small: that's what the layout is for.
+            if gr < 30.0 && self.layout != Layout::Containers {
                 continue;
             }
-            let kind = g.info.kind.map(|k| format!("{} · ", k.label())).unwrap_or_default();
-            let markup = format!(
-                "<b>{}</b>  <span alpha='65%'>{kind}×{} · {} · {}</span>",
-                glib_escape(&g.info.label),
-                g.members,
-                fmt_cpu(g.cpu),
-                fmt_bytes(g.mem)
-            );
+            // Small containers: the name only, so neighbours' labels fit.
+            let markup = if gr < 60.0 {
+                format!("<b>{}</b>", glib_escape(&g.info.label))
+            } else {
+                let kind = g.info.kind.map(|k| format!("{} · ", k.label())).unwrap_or_default();
+                format!(
+                    "<b>{}</b>  <span alpha='65%'>{kind}×{} · {} · {}</span>",
+                    glib_escape(&g.info.label),
+                    g.members,
+                    fmt_cpu(g.cpu),
+                    fmt_bytes(g.mem)
+                )
+            };
+            let gr = gr.max(60.0);
             let l = pango::Layout::new(pctx);
             l.set_font_description(Some(&font(11.0, false)));
             l.set_markup(&markup);
@@ -514,8 +677,8 @@ impl View {
             glib_escape(&p.name),
             p.pid,
             glib_escape(&p.user),
-            p.service.kind.label(),
-            glib_escape(&p.service.label),
+            if b.item.container.is_some() { "container" } else { p.service.kind.label() },
+            glib_escape(b.item.container.as_ref().map_or(&*p.service.label, |c| &*c.name)),
             fmt_cpu(b.cpu),
             fmt_bytes(p.rss),
             mem_pct,

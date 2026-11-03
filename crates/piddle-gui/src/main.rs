@@ -11,6 +11,7 @@ use std::sync::atomic::Ordering;
 use gtk::prelude::*;
 use gtk::{gdk, glib};
 
+use piddle_core::containers::{Choice, Filter};
 use piddle_core::encode::{self, fmt_bytes, fmt_cpu};
 use piddle_core::sampler::{self, Control};
 use piddle_gtk::Canvas;
@@ -144,11 +145,16 @@ searchentry { min-width: 260px; }
 .toast button { background: #2a3140; color: #e6e9ef; border: none; border-radius: 999px; padding: 4px 12px;
   box-shadow: none; margin: 0; min-height: 0; }
 .toast button:hover { background: #343c4e; }
+.gone { border-color: rgba(255,120,90,0.55); }
 "#;
+
+/// Position of "By container" in the layout dropdown (shown while
+/// containers run).
+const CONTAINERS_LAYOUT: u32 = 5;
 
 fn main() -> glib::ExitCode {
     silence_foreign_config_warning();
-    // Headless render for testing/docs: piddle-gui --snapshot out.png [free|app|service|parent|tree] [query]
+    // Headless render for testing/docs: piddle-gui --snapshot out.png [free|app|service|parent|tree|containers] [query]
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("-V" | "--version") => {
@@ -158,7 +164,7 @@ fn main() -> glib::ExitCode {
         Some("-h" | "--help") => {
             println!(
                 "piddle-gui: processes as bubbles, sized by memory and colored by CPU\n\n\
-                 Usage: piddle-gui [--snapshot FILE [free|app|service|parent|tree] [query]]\n\n\
+                 Usage: piddle-gui [--snapshot FILE [free|app|service|parent|tree|containers] [query]]\n\n\
                  --snapshot renders the canvas once to a PNG and exits (needs a display).\n\
                  The piddle launcher starts this, or the terminal interface without a display."
             );
@@ -179,6 +185,7 @@ fn main() -> glib::ExitCode {
             Some("service") => Layout::Service,
             Some("parent") => Layout::Parent,
             Some("tree") => Layout::Tree,
+            Some("containers") => Layout::Containers,
             _ => Layout::Free,
         };
         snapshot(path, layout, args.get(4).map(String::as_str).unwrap_or(""));
@@ -299,6 +306,43 @@ fn build_ui(app: &gtk::Application) {
     header.pack_end(&kernel_btn);
     header.pack_end(&layout_dd);
 
+    // Containers picker: only while some process is in a container.
+    let containers_model = gtk::StringList::new(&[]);
+    let containers_dd = gtk::DropDown::new(Some(containers_model.clone()), None::<gtk::Expression>);
+    containers_dd.set_tooltip_text(Some("Limit the view to containers, a Compose project or pod, or one container"));
+    containers_dd.set_visible(false);
+    // The entries behind the model, and a guard against our own updates.
+    let shown_choices: Rc<RefCell<Vec<Choice>>> = Rc::default();
+    let updating = Rc::new(Cell::new(false));
+    let list_factory = gtk::SignalListItemFactory::new();
+    list_factory.connect_setup(|_, item| {
+        let label = gtk::Label::new(None);
+        label.set_xalign(0.0);
+        item.downcast_ref::<gtk::ListItem>().unwrap().set_child(Some(&label));
+    });
+    list_factory.connect_bind(glib::clone!(
+        #[strong]
+        shown_choices,
+        move |_, item| {
+            let item = item.downcast_ref::<gtk::ListItem>().unwrap();
+            let label = item.child().and_downcast::<gtk::Label>().unwrap();
+            let shown = shown_choices.borrow();
+            let Some(c) = shown.get(item.position() as usize) else { return };
+            let indent = "    ".repeat(c.depth as usize);
+            let name = match c.filter {
+                Filter::Container { .. } => glib_escape(&c.label),
+                _ => format!("<b>{}</b>", glib_escape(&c.label)),
+            };
+            let n = c.procs;
+            label.set_markup(&format!(
+                "{indent}{name}  <span alpha='55%'>{n} process{}</span>",
+                if n == 1 { "" } else { "es" }
+            ));
+        }
+    ));
+    containers_dd.set_list_factory(Some(&list_factory));
+    header.pack_end(&containers_dd);
+
     // ---------------------------------------------------------------- canvas
     let canvas = Canvas::new(view.clone());
     canvas.set_hexpand(true);
@@ -398,9 +442,25 @@ fn build_ui(app: &gtk::Application) {
         .valign(gtk::Align::End)
         .margin_bottom(20)
         .build();
+    // Shown while the container the view is limited to has stopped.
+    let gone_label = gtk::Label::new(None);
+    let gone_all = gtk::Button::with_label("Show all processes");
+    let gone_box = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    gone_box.add_css_class("toast");
+    gone_box.add_css_class("gone");
+    gone_box.append(&gone_label);
+    gone_box.append(&gone_all);
+    let gone = gtk::Revealer::builder()
+        .child(&gone_box)
+        .transition_type(gtk::RevealerTransitionType::SlideDown)
+        .halign(gtk::Align::Center)
+        .valign(gtk::Align::Start)
+        .margin_top(16)
+        .build();
     let canvas_overlay = gtk::Overlay::new();
     canvas_overlay.set_child(Some(&canvas));
     canvas_overlay.add_overlay(&toast);
+    canvas_overlay.add_overlay(&gone);
 
     let body = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     body.add_css_class("main");
@@ -565,12 +625,111 @@ fn build_ui(app: &gtk::Application) {
                 2 => Layout::Service,
                 3 => Layout::Parent,
                 4 => Layout::Tree,
+                CONTAINERS_LAYOUT => Layout::Containers,
                 _ => Layout::Free,
             };
             anim.view.borrow_mut().set_layout(l);
             anim.kick();
         }
     ));
+    // Choosing all containers or a project or pod shows their structure (the
+    // by-container layout); one container keeps the current layout.
+    let choose = {
+        let (anim, layout_dd) = (anim.clone(), layout_dd.clone());
+        move |f: Filter| {
+            let structure = matches!(f, Filter::Containers | Filter::Group(_));
+            anim.view.borrow_mut().set_filter(f);
+            if structure && layout_dd.selected() != CONTAINERS_LAYOUT {
+                layout_dd.set_selected(CONTAINERS_LAYOUT);
+            }
+            anim.kick();
+        }
+    };
+    containers_dd.connect_selected_notify(glib::clone!(
+        #[strong]
+        shown_choices,
+        #[strong]
+        updating,
+        #[strong]
+        choose,
+        move |d| {
+            if updating.get() {
+                return;
+            }
+            let f = shown_choices.borrow().get(d.selected() as usize).map(|c| c.filter.clone());
+            if let Some(f) = f {
+                choose(f);
+            }
+        }
+    ));
+    gone_all.connect_clicked(glib::clone!(
+        #[strong]
+        choose,
+        #[weak]
+        containers_dd,
+        move |_| {
+            choose(Filter::All);
+            containers_dd.set_selected(0);
+        }
+    ));
+    // Bring the picker, the layout entry and the banner in line with the
+    // latest sample.
+    let sync_containers = {
+        let (view, layout_dd, containers_dd, gone, gone_label) =
+            (view.clone(), layout_dd.clone(), containers_dd.clone(), gone.clone(), gone_label.clone());
+        move || {
+            let v = view.borrow();
+            let have = !v.choices.is_empty();
+            containers_dd.set_visible(have || !v.filter.is_all());
+            let layouts = layout_dd.model().and_downcast::<gtk::StringList>().unwrap();
+            if have && layouts.n_items() == CONTAINERS_LAYOUT {
+                layouts.append("By container");
+            } else if !have && v.filter.is_all() && layouts.n_items() > CONTAINERS_LAYOUT {
+                if layout_dd.selected() == CONTAINERS_LAYOUT {
+                    // Leave the layout before its entry goes; this re-enters the view.
+                    drop(v);
+                    layout_dd.set_selected(0);
+                    layouts.remove(CONTAINERS_LAYOUT);
+                    return;
+                }
+                layouts.remove(CONTAINERS_LAYOUT);
+            }
+            // The entries, plus the stopped one while the view is still on it.
+            let mut entries = v.choices.clone();
+            if v.filter_gone {
+                let name = piddle_core::containers::filter_label(&v.filter, &v.choices);
+                entries.push(Choice {
+                    filter: v.filter.clone(),
+                    label: format!("{name} (stopped)"),
+                    depth: 0,
+                    procs: 0,
+                });
+            }
+            // Replace the model only when the entries change.
+            let differs = {
+                let shown = shown_choices.borrow();
+                shown.len() != entries.len()
+                    || shown.iter().zip(&entries).any(|(a, b)| a.filter != b.filter || a.label != b.label)
+            };
+            updating.set(true);
+            if differs {
+                let labels: Vec<&str> = entries.iter().map(|c| c.label.as_str()).collect();
+                containers_model.splice(0, containers_model.n_items(), &labels);
+            }
+            let at = entries.iter().position(|c| c.filter == v.filter);
+            *shown_choices.borrow_mut() = entries;
+            containers_dd.set_selected(at.map_or(gtk::INVALID_LIST_POSITION, |i| i as u32));
+            updating.set(false);
+            match v.filter_text() {
+                Some((text, true)) => {
+                    gone_label.set_text(&text);
+                    gone.set_reveal_child(true);
+                }
+                _ => gone.set_reveal_child(false),
+            }
+        }
+    };
+
     interval_dd.connect_selected_notify(glib::clone!(
         #[strong]
         control,
@@ -627,6 +786,7 @@ fn build_ui(app: &gtk::Application) {
             let mut top_rows: Vec<gtk::Button> = Vec::new();
             while let Ok(snap) = rx.recv().await {
                 view.borrow_mut().apply(snap);
+                sync_containers();
                 update_matches();
                 anim.kick();
 
@@ -719,6 +879,11 @@ fn snapshot(path: &str, layout: Layout, query: &str) {
     v.scene.size = (w, h);
     v.set_layout(layout);
     v.set_query(query);
+    // The containers layout shows only containers, as choosing "All
+    // containers" does.
+    if layout == Layout::Containers {
+        v.set_filter(Filter::Containers);
+    }
     for _ in 0..4 {
         v.apply(rx.recv_blocking().expect("sampler"));
         for _ in 0..30 {

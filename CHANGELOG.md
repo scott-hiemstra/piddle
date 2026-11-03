@@ -6,14 +6,16 @@ the release notes on GitHub, and a release fails if its section is missing.
 ## [Unreleased]
 
 ### Added
-- Containers view. While containers are running, the TUI's `c` key opens a
-  picker that limits the view to all containers, one Compose project or pod,
-  or one container; Esc goes back to all processes. A new "by container"
-  view (`6`) groups processes by Compose project, Podman pod or Kubernetes
-  pod, then by container, with totals for each, and a service's replicas
-  side by side. Without containers, neither the key nor the view appears.
-  If the container being viewed stops, the view says so; one recreated under
-  the same name (`docker compose up`) is followed to its new ID.
+- Containers view. While containers are running, a picker (a dropdown in the
+  GUI header, `c` in the TUI) limits the view to all containers, one Compose
+  project or pod, or one container. A new "by container" layout (`6` in the
+  TUI) groups processes by container, with each Compose project, Podman pod
+  or Kubernetes pod holding its containers together, with totals; in the GUI
+  that is an outer hull around the project's containers. A service's
+  replicas sit side by side. Without containers, the picker and the layout
+  don't appear. If the container being viewed stops, the view says so and
+  offers to go back to all processes; one recreated under the same name
+  (`docker compose up`) is followed to its new ID.
 - Container names, Compose projects and services, and Podman pods come from
   the Docker or Podman API socket, through read-only list calls only, and
   only while containers of that runtime are running. Without access (Docker's

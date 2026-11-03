@@ -46,12 +46,14 @@ Hover a bubble for CPU, memory and thread count. Click it to open the details wi
 
 - Real data sampled from `/proc` every 250 ms, 500 ms, 1 s or 2 s (configurable), with a pause button.
 - Smooth animation: sizes, colors, fade-in and fade-out ease between samples. A damped, position-based simulation keeps existing bubbles where they are and only nudges neighbours.
-- Five layouts:
+- Five layouts, plus **By container** while containers run:
   - **Free**: one packed cloud.
   - **By application**: processes clustered by executable, for example all `chrome` processes. Each cluster shows its count, total CPU and total memory.
   - **By service**: processes clustered by the systemd service, scope or container they run in, read from `/proc/<pid>/cgroup`. Hull colors mark the kind: system services, user services (your `systemd --user` units), scopes (login sessions and launched apps), and containers (Docker, Podman, Kubernetes, LXC, systemd-nspawn, libvirt machines). OpenRC services are recognized too. Anything else falls back to its cgroup name, so the view still works without systemd. Membership is re-read every few samples, so a process moved to another cgroup changes cluster.
   - **By parent**: processes clustered by parent PID.
   - **Process tree**: a radial tree with the root in the center and one ring per generation. Parent→child links are drawn, and siblings are ordered by PID so the tree doesn't reshuffle. Every parent process gets a tag with its name, PID and child count, even when its bubble is tiny.
+  - **By container**: one hull per container, named, and each Compose project or pod drawn as an outer hull around its containers, with totals. See [Containers](#containers).
+- **Containers picker** in the header, shown only while some process is in a container. See [Containers](#containers).
 - Search by name, command line, service or PID prefix. Matches are ringed and everything else is dimmed, so the layout doesn't jump around.
 - Filters: show or hide kernel threads (hidden by default), and **Active only**, which shows processes that used CPU in the last few seconds.
 - Screenshots: the camera button or **Ctrl+S** saves the canvas and sidebar as a full-resolution PNG in `~/Pictures` and copies it to the clipboard. With Ctrl+S, the hover card for the process under the mouse is included.
@@ -80,7 +82,8 @@ A live process list with system CPU and memory meters. Each row shows:
 - disk reads and writes per second;
 - threads and state.
 
-- The same views: list, by application, by service, by parent, and process tree. Groups and tree branches can be collapsed.
+- The same views: list, by application, by service, by parent, and process tree, plus by container while containers run. Groups and tree branches can be collapsed.
+- `c` opens the containers picker, while containers run (see [Containers](#containers)).
 - Search, sorting (CPU, memory, disk I/O, PID, name), active-only and kernel-thread filters, and an adjustable sampling interval.
 - A details popup with service and cgroup, CPU history, disk I/O totals, and the process's network connections.
 - Press `l` in the details popup for the service's journal, followed live (`o` toggles this process only; ↑↓ PgUp PgDn scroll and pause following; End resumes).
@@ -94,6 +97,8 @@ A live process list with system CPU and memory meters. Each row shows:
 | Space | Collapse / expand a group or tree branch |
 | `/` | Search name, command, service or PID (Esc clears) |
 | `v` or `1`–`5` | View: list, by application, by service, by parent, tree |
+| `6` | View: by container (while containers run) |
+| `c` | Containers picker (while containers run); Esc goes back to all processes |
 | `s` | Sort: CPU, memory, disk I/O, PID, name |
 | `i` | Show / hide the disk I/O columns |
 | `a` / `K` | Active only / show kernel threads |
@@ -103,6 +108,28 @@ A live process list with system CPU and memory meters. Each row shows:
 | `l` (in details) | Journal logs for the service; `o` this process only |
 | `?` | Help |
 | `q`, Ctrl+C | Quit |
+
+## Containers
+
+While any process runs in a container, PIDdle offers a picker (a dropdown in the GUI header, `c` in the terminal) that limits the view to:
+
+- **All containers**,
+- one **Compose project** or **pod**, or
+- one **container**.
+
+Choosing all containers or a project or pod switches to the **by container** layout, where each container is a group and each Compose project, Podman pod or Kubernetes pod holds its containers together, with totals; a Compose service's replicas sit side by side. Choosing one container keeps the current layout. Bubbles, details and actions work as everywhere else. On a machine without containers, the picker, the layout and their keys don't appear.
+
+If the container you are looking at stops, the view says so and offers to go back to all processes. One that Compose recreates under the same name (`docker compose up`) is followed to its new ID.
+
+Where the names come from:
+
+- **Which processes are in which container** comes from `/proc/<pid>/cgroup`, as for the by-service layout. That finds Docker, Podman, containerd, CRI-O, Kubernetes, LXC, systemd-nspawn and libvirt containers without asking anyone.
+- **Names, Compose projects and services, and Podman pods** come from the runtime's API socket: `GET /containers/json` and nothing else, never a call that changes a container, and only while containers of that runtime are running. Labels are sanitized like process names.
+- **Docker's socket** (`/var/run/docker.sock`) is readable only by root and the `docker` group, and that group is equivalent to root, so PIDdle doesn't suggest joining it. Without access, Docker containers keep their short IDs (`docker 4f1c0e2a9b7d`) and the picker and details say why. Rootless Docker's socket in `$XDG_RUNTIME_DIR` is used when present.
+- **Podman** is asked through `$XDG_RUNTIME_DIR/podman/podman.sock` (your rootless containers; `systemctl --user start podman.socket` starts it) or `/run/podman/podman.sock` (root's).
+- **Kubernetes** containers are grouped by pod UID; [kpiddle](https://github.com/scott-hiemstra/kpiddle) shows a cluster by name.
+
+Starting, stopping and restarting containers is the runtime's job; PIDdle doesn't do it.
 
 ## Disk I/O and network: what Linux allows
 

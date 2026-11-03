@@ -95,10 +95,11 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
     // ---- info list
     let grid = gtk::Grid::builder().row_spacing(8).column_spacing(18).build();
     grid.add_css_class("details-card");
-    let mut values: Vec<(&'static str, gtk::Label)> = Vec::new();
-    for (row, key) in ["Parent", "User", "Service", "Cgroup", "Started", "Priority", "Virtual size", "Executable"]
-        .into_iter()
-        .enumerate()
+    let mut values: Vec<(&'static str, gtk::Label, gtk::Label)> = Vec::new();
+    for (row, key) in
+        ["Parent", "User", "Service", "Container", "Cgroup", "Started", "Priority", "Virtual size", "Executable"]
+            .into_iter()
+            .enumerate()
     {
         let k = gtk::Label::builder().label(key).xalign(0.0).yalign(0.0).build();
         k.add_css_class("info-key");
@@ -118,7 +119,7 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
         v.add_css_class("info-val");
         grid.attach(&k, 0, row as i32, 1, 1);
         grid.attach(&v, 1, row as i32, 1, 1);
-        values.push((key, v));
+        values.push((key, k, v));
     }
     root.append(&grid);
 
@@ -329,7 +330,13 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
                 // No boot time: /proc shows processes only (subset=pid).
                 "—".to_string()
             };
-            for (key, label) in &values {
+            let container = v.placement(p);
+            for (key, key_label, label) in &values {
+                // Only processes in a container have that row.
+                if *key == "Container" {
+                    key_label.set_visible(container.is_some());
+                    label.set_visible(container.is_some());
+                }
                 let text = match *key {
                     "Parent" => match v.name_of(p.ppid) {
                         Some(n) => format!("{n}  ({})", p.ppid),
@@ -337,6 +344,20 @@ pub fn open(parent: &gtk::ApplicationWindow, view: &Rc<RefCell<View>>, pid: i32)
                     },
                     "User" => format!("{}  (uid {})", p.user, p.uid),
                     "Service" => p.service.describe(),
+                    "Container" => match &container {
+                        Some(c) => {
+                            let mut t = format!("{}  ({})", c.name, c.detail);
+                            // Unnamed: the runtime couldn't be asked; say why.
+                            if c.name == p.service.label {
+                                for note in v.inventory.notes() {
+                                    t.push('\n');
+                                    t.push_str(&note);
+                                }
+                            }
+                            t
+                        }
+                        None => String::new(),
+                    },
                     "Cgroup" => p.service.path.to_string(),
                     "Started" => started.clone(),
                     "Priority" => format!("nice {}", p.nice),

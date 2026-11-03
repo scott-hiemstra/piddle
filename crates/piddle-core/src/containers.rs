@@ -584,18 +584,25 @@ pub fn choices(procs: &[ProcInfo], inv: &Inventory) -> Vec<Choice> {
     v
 }
 
-/// Check the current filter against fresh choices. A container that was
-/// recreated under the same name is followed to its new key; `None` means
-/// what the filter named is gone (stopped, or the last process left).
+/// Check the current filter against fresh choices. A container is matched by
+/// its key first, taking up its current name (a rename, or the runtime API
+/// naming a container first seen by short ID); only when the key is gone is
+/// it followed by name to a container recreated under that name. `None`
+/// means what the filter named is gone (stopped, or the last process left).
 pub fn resolve(filter: &Filter, choices: &[Choice]) -> Option<Filter> {
+    let containers = || {
+        choices.iter().filter_map(|c| match &c.filter {
+            Filter::Container { key, name } => Some((key, name, &c.filter)),
+            _ => None,
+        })
+    };
     match filter {
         Filter::All => Some(Filter::All),
-        _ if choices.iter().any(|c| c.filter == *filter) => Some(filter.clone()),
-        Filter::Container { name, .. } => choices
-            .iter()
-            .find(|c| matches!(&c.filter, Filter::Container { name: n, .. } if n == name))
-            .map(|c| c.filter.clone()),
-        _ => None,
+        Filter::Container { key, name } => containers()
+            .find(|(k, ..)| *k == key)
+            .or_else(|| containers().find(|(_, n, _)| *n == name))
+            .map(|(.., f)| f.clone()),
+        _ => choices.iter().any(|c| c.filter == *filter).then(|| filter.clone()),
     }
 }
 
@@ -877,5 +884,57 @@ mod tests {
         assert_eq!(resolve(&Filter::Group("compose:docker:gone".into()), &c3), None);
         assert_eq!(filter_label(&Filter::Group("compose:docker:gone".into()), &c3), "gone");
         assert_eq!(resolve(&Filter::All, &[]), Some(Filter::All));
+    }
+
+    #[test]
+    fn renamed_container_stays_selected() {
+        let inv = inventory();
+        let p = procs();
+        let solo = choices(&p, &inv)[9].filter.clone();
+        let mut inv2 = inv.clone();
+        inv2.containers.get_mut(&*id('d')).unwrap().name = "solo-renamed".into();
+        let c2 = choices(&p, &inv2);
+        let kept = resolve(&solo, &c2).unwrap();
+        assert!(matches!(&kept, Filter::Container { name, .. } if &**name == "solo-renamed"));
+        assert_eq!(filter_label(&kept, &c2), "solo-renamed");
+        let count = |f: &Filter| p.iter().filter(|x| f.shows(place(&x.service, &inv2).as_ref())).count();
+        assert_eq!(count(&kept), 1);
+    }
+
+    #[test]
+    fn delayed_metadata_keeps_the_selection() {
+        // Picked while the runtime API had not listed it yet: named by short ID.
+        let inv = inventory();
+        let p = procs();
+        let c = choices(&p, &inv);
+        let unknown = c[8].filter.clone();
+        assert!(matches!(&unknown, Filter::Container { name, .. } if name.starts_with("docker ")));
+        // The next refresh lists it with its real name.
+        let mut inv2 = inv.clone();
+        let e = Container {
+            runtime: Runtime::Docker,
+            id: id('e').into(),
+            name: "late".into(),
+            image: "img".into(),
+            manager: Manager::None,
+        };
+        inv2.containers.insert(e.id.clone(), e);
+        let c2 = choices(&p, &inv2);
+        let kept = resolve(&unknown, &c2).unwrap();
+        assert_eq!(filter_label(&kept, &c2), "late");
+        assert_eq!(p.iter().filter(|x| kept.shows(place(&x.service, &inv2).as_ref())).count(), 1);
+        // The key wins over a name match: another container now called
+        // "solo" does not steal a selection whose key still runs.
+        let solo = c[9].filter.clone();
+        let mut inv3 = inv.clone();
+        inv3.containers.get_mut(&*id('d')).unwrap().name = "solo-old".into();
+        inv3.containers.get_mut(&*id('c')).unwrap().name = "solo".into();
+        let key_of = |f: &Filter| match f {
+            Filter::Container { key, .. } => key.clone(),
+            _ => panic!("not a container: {f:?}"),
+        };
+        let kept = resolve(&solo, &choices(&p, &inv3)).unwrap();
+        assert_eq!(key_of(&kept), key_of(&solo));
+        assert_eq!(filter_label(&kept, &[]), "solo-old");
     }
 }

@@ -707,7 +707,10 @@ fn draw_help(f: &mut Frame, app: &App, pal: &Palette) {
 fn draw_picker(f: &mut Frame, app: &App, pal: &Palette, at: usize) {
     let notes = app.snap.as_ref().map(|s| s.containers.notes()).unwrap_or_default();
     let full = f.area();
-    let height = (app.choices.len() as u16 + notes.len() as u16 * 2 + 4).clamp(6, full.height.saturating_sub(4));
+    // At least 6 rows when the terminal has them; never more than it has
+    // (a clamp with min > max panics below 10 rows).
+    let want = app.choices.len() as u16 + notes.len() as u16 * 2 + 4;
+    let height = want.max(6).min(full.height.saturating_sub(4));
     let area = popup(full, 64, height);
     f.render_widget(Clear, area);
     let block = popup_block("Containers", pal.fix(kind_color(ServiceKind::Container)), pal)
@@ -750,4 +753,48 @@ fn draw_picker(f: &mut Frame, app: &App, pal: &Palette, at: usize) {
         }
     }
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::tests::{container_procs, snap_with_containers};
+    use crate::app::{App, Mode};
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn render(app: &mut App, w: u16, h: u16) {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| draw(f, app, &Palette { truecolor: true })).unwrap();
+    }
+
+    #[test]
+    fn containers_picker_fits_small_terminals() {
+        let (procs, inv) = container_procs();
+        let mut app = App::new(piddle_core::sampler::Control::new(1000));
+        app.apply(snap_with_containers(procs, inv));
+        assert!(!app.choices.is_empty());
+        // Opened at every size, then the terminal shrinks (a resize) with it open.
+        for at in [0, app.choices.len() - 1] {
+            for w in [1, 10, 30, 80] {
+                for h in (0..=12).rev() {
+                    app.mode = Mode::Containers(at);
+                    render(&mut app, w, h);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn small_terminals_render_every_mode() {
+        let (procs, inv) = container_procs();
+        let mut app = App::new(piddle_core::sampler::Control::new(1000));
+        app.apply(snap_with_containers(procs, inv));
+        let modes: [fn() -> Mode; 4] = [|| Mode::Normal, || Mode::Search, || Mode::Help, || Mode::Containers(0)];
+        for mode in modes {
+            for (w, h) in [(1, 1), (20, 3), (40, 6), (80, 9), (80, 10)] {
+                app.mode = mode();
+                render(&mut app, w, h);
+            }
+        }
+    }
 }

@@ -3,6 +3,17 @@
 Notable changes in each release. The section for a version is published as
 the release notes on GitHub, and a release fails if its section is missing.
 
+## [Unreleased]
+
+### Fixed
+- The TUI no longer crashes when the containers picker is opened, or the
+  terminal resized with it open, below 10 rows.
+- A selected container stays selected when its name changes: after a rename,
+  or when the runtime API names a container first shown by its short ID.
+  Both interfaces used to hide its processes as if it had stopped. A
+  container is now matched by its ID first, and by name only when that ID is
+  gone (a recreated Compose container).
+
 ## [0.5.0] - 2026-11-03
 
 ### Added
@@ -229,6 +240,7 @@ part of the system.
 - Screenshots.
 - `.deb`, `.rpm` and Arch packages, built by GitHub Actions.
 
+[Unreleased]: https://github.com/scott-hiemstra/piddle/compare/v0.5.0...HEAD
 [0.5.0]: https://github.com/scott-hiemstra/piddle/compare/v0.4.5...v0.5.0
 [0.4.5]: https://github.com/scott-hiemstra/piddle/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/scott-hiemstra/piddle/compare/v0.4.3...v0.4.4

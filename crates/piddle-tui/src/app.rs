@@ -984,7 +984,7 @@ pub fn io_rate(p: &ProcInfo) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use ratatui::crossterm::event::KeyEvent;
 
@@ -1026,7 +1026,7 @@ mod tests {
         }
     }
 
-    fn snap_with_containers(procs: Vec<ProcInfo>, inv: containers::Inventory) -> Snapshot {
+    pub(crate) fn snap_with_containers(procs: Vec<ProcInfo>, inv: containers::Inventory) -> Snapshot {
         Snapshot { containers: Arc::new(inv), ..snap(procs) }
     }
 
@@ -1069,7 +1069,7 @@ mod tests {
         c.to_string().repeat(64)
     }
 
-    fn container_procs() -> (Vec<ProcInfo>, containers::Inventory) {
+    pub(crate) fn container_procs() -> (Vec<ProcInfo>, containers::Inventory) {
         use piddle_core::containers::{Access, Container, Inventory, Manager, Runtime};
         let d = |c| format!("/system.slice/docker-{}.scope", docker_id(c));
         let procs = vec![

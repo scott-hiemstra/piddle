@@ -5,7 +5,7 @@ CPU load, and related things are grouped.
 
 | Tool       | Scope                               | Status                          |
 |------------|-------------------------------------|---------------------------------|
-| PIDdle     | one machine (GUI + TUI)             | released, 0.4.5                 |
+| PIDdle     | one machine (GUI + TUI)             | released, 0.5.0                 |
 | kpiddle    | a Kubernetes cluster                | released, 0.2.0, in its own repo |
 | recording  | record and play back, for all three | planned                         |
 | piddle-mcp | read-only access for AI agents      | planned                         |
@@ -23,20 +23,7 @@ detailed plans live in their repos.
    bubble per workload for big clusters, and pod events and logs in the
    details. See "Next" in the kpiddle repo's
    [docs/DESIGN.md](https://github.com/scott-hiemstra/kpiddle/blob/main/docs/DESIGN.md).
-2. **Containers view.** Built on main for the next release; the README's
-   "Containers" section describes it. A picker (GUI header dropdown, `c` in
-   the TUI) limits the view to all containers, one Compose project or pod, or
-   one container, and a "by container" layout holds each project's or pod's
-   containers together with totals (an outer hull in the GUI, from
-   piddle-scene's new clusters). Names come from read-only
-   `GET /containers/json` calls to the Docker or Podman socket, only while
-   containers run; without access they stay short IDs and the picker says
-   why. Neither appears without containers. Left for later:
-   - Labels of neighbouring clusters can touch in the GUI, as group labels
-     can in the other grouped layouts.
-   - Kubernetes pods are known by UID only (no CRI calls); kpiddle has names.
-   - Out of scope: starting, stopping or restarting containers.
-3. **Snapshot format and recording/playback.** Define one serialized snapshot
+2. **Snapshot format and recording/playback.** Define one serialized snapshot
    stream (full, then deltas). It serves as:
    - a recording file,
    - the piddle-net wire format, and
@@ -49,10 +36,10 @@ detailed plans live in their repos.
      from the start.
    - Live streams never drop deltas. A slow viewer gets a delta computed from
      its own last-known state, or a fresh full snapshot.
-4. **piddle-mcp.** A read-only MCP server exposing the current snapshot,
+3. **piddle-mcp.** A read-only MCP server exposing the current snapshot,
    history and the selected process or workload. Any MCP-capable agent or
    client can then investigate the same thing you are looking at. No actions.
-5. **piddle-net.** Agents, the directory/key server, and client-bound tokens.
+4. **piddle-net.** Agents, the directory/key server, and client-bound tokens.
    See `docs/DESIGN.md` in the
    [piddle-net repo](https://github.com/scott-hiemstra/piddle-net).
 
@@ -63,6 +50,17 @@ detailed plans live in their repos.
 
 ## Done
 
+- **0.5.0: containers view.** A picker (GUI header dropdown, `c` in the
+  TUI) limits the view to all containers, one Compose project or pod, or one
+  container, and a "by container" layout holds each project's or pod's
+  containers together with totals (an outer hull in the GUI, from
+  piddle-common 0.1.2's clusters). Names come from read-only
+  `GET /containers/json` calls to the Docker or Podman socket, only while
+  containers run; without access they stay short IDs and the picker says
+  why. Neither appears without containers. Left for later: labels of
+  neighbouring clusters can touch in the GUI, and Kubernetes pods are known
+  by UID only (kpiddle has names). Starting, stopping or restarting
+  containers stays out of scope.
 - **0.4.5: `subset=pid` fix.** PIDdle runs under a `/proc` mounted with
   `subset=pid` again, showing the whole-machine figures it can't read as
   unavailable instead of zero.

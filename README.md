@@ -111,6 +111,10 @@ A live process list with system CPU and memory meters. Each row shows:
 
 ## Containers
 
+| One Compose project | All containers |
+|---|---|
+| ![A Compose project's containers inside its outer hull: two nginx replicas, postgres, redis and a load generator, with totals](docs/screenshots/gui-containers-project.png) | ![Every container on the machine, each Compose project holding its containers together](docs/screenshots/gui-containers-all.png) |
+
 While any process runs in a container, PIDdle offers a picker (a dropdown in the GUI header, `c` in the terminal) that limits the view to:
 
 - **All containers**,
@@ -195,9 +199,9 @@ On a server, install `piddle`. On a desktop, install both; `piddle-gui` alone al
 
 | Distribution | Install (x86_64 file names; ARM64 uses `arm64` / `aarch64`) |
 |---|---|
-| Debian, Ubuntu | `sudo apt install ./piddle_0.4.5_amd64.deb ./piddle-gui_0.4.5_amd64.deb` |
-| Fedora, RHEL, openSUSE | `sudo dnf install ./piddle-0.4.5-1.x86_64.rpm ./piddle-gui-0.4.5-1.x86_64.rpm` |
-| Arch Linux | `sudo pacman -U piddle-0.4.5-1-x86_64.pkg.tar.zst piddle-gui-0.4.5-1-x86_64.pkg.tar.zst` |
+| Debian, Ubuntu | `sudo apt install ./piddle_0.5.0_amd64.deb ./piddle-gui_0.5.0_amd64.deb` |
+| Fedora, RHEL, openSUSE | `sudo dnf install ./piddle-0.5.0-1.x86_64.rpm ./piddle-gui-0.5.0-1.x86_64.rpm` |
+| Arch Linux | `sudo pacman -U piddle-0.5.0-1-x86_64.pkg.tar.zst piddle-gui-0.5.0-1-x86_64.pkg.tar.zst` |
 
 Remove with `apt remove`, `dnf remove` or `pacman -R` and the package names.
 

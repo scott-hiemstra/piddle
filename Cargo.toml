@@ -12,9 +12,9 @@ authors = ["Scott Hiemstra <scott@hiemstra.us>"]
 # same commit for each). scripts/bump-common.sh vX.Y.Z updates them, and
 # scripts/use-local-common.sh builds against a sibling checkout instead.
 [workspace.dependencies]
-piddle-encode = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "5a28d97804c2dbcd2dd7b25a2e74ed0bc2ca5ac9" } # v0.1.1
-piddle-scene = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "5a28d97804c2dbcd2dd7b25a2e74ed0bc2ca5ac9" } # v0.1.1
-piddle-gtk = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "5a28d97804c2dbcd2dd7b25a2e74ed0bc2ca5ac9" } # v0.1.1
+piddle-encode = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "8db1e8531b782210776f2bb0849cb2a868d35bc9" } # v0.1.2
+piddle-scene = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "8db1e8531b782210776f2bb0849cb2a868d35bc9" } # v0.1.2
+piddle-gtk = { git = "https://github.com/scott-hiemstra/piddle-common", rev = "8db1e8531b782210776f2bb0849cb2a868d35bc9" } # v0.1.2
 
 [profile.release]
 opt-level = 3

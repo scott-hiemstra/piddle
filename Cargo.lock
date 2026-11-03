@@ -1349,16 +1349,16 @@ dependencies = [
 
 [[package]]
 name = "piddle-encode"
-version = "0.1.1"
-source = "git+https://github.com/scott-hiemstra/piddle-common?rev=5a28d97804c2dbcd2dd7b25a2e74ed0bc2ca5ac9#5a28d97804c2dbcd2dd7b25a2e74ed0bc2ca5ac9"
+version = "0.1.2"
+source = "git+https://github.com/scott-hiemstra/piddle-common?rev=8db1e8531b782210776f2bb0849cb2a868d35bc9#8db1e8531b782210776f2bb0849cb2a868d35bc9"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "piddle-gtk"
-version = "0.1.1"
-source = "git+https://github.com/scott-hiemstra/piddle-common?rev=5a28d97804c2dbcd2dd7b25a2e74ed0bc2ca5ac9#5a28d97804c2dbcd2dd7b25a2e74ed0bc2ca5ac9"
+version = "0.1.2"
+source = "git+https://github.com/scott-hiemstra/piddle-common?rev=8db1e8531b782210776f2bb0849cb2a868d35bc9#8db1e8531b782210776f2bb0849cb2a868d35bc9"
 dependencies = [
  "gtk4",
 ]
@@ -1376,8 +1376,8 @@ dependencies = [
 
 [[package]]
 name = "piddle-scene"
-version = "0.1.1"
-source = "git+https://github.com/scott-hiemstra/piddle-common?rev=5a28d97804c2dbcd2dd7b25a2e74ed0bc2ca5ac9#5a28d97804c2dbcd2dd7b25a2e74ed0bc2ca5ac9"
+version = "0.1.2"
+source = "git+https://github.com/scott-hiemstra/piddle-common?rev=8db1e8531b782210776f2bb0849cb2a868d35bc9#8db1e8531b782210776f2bb0849cb2a868d35bc9"
 
 [[package]]
 name = "piddle-tui"

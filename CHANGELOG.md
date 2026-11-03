@@ -24,6 +24,8 @@ the release notes on GitHub, and a release fails if its section is missing.
   container, what manages it and its image.
 
 ### Changed
+- piddle-common 0.1.2, for piddle-scene's clusters (the outer hulls of
+  Compose projects and pods).
 - `scripts/use-local-common.sh` is now a thin wrapper around piddle-common's
   own copy, the only one; it finds the checkout via a path after `on`,
   `$PIDDLE_COMMON` or `../piddle-common`, and says how to undo the block by

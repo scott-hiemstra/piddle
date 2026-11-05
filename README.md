@@ -199,9 +199,9 @@ On a server, install `piddle`. On a desktop, install both; `piddle-gui` alone al
 
 | Distribution | Install (x86_64 file names; ARM64 uses `arm64` / `aarch64`) |
 |---|---|
-| Debian, Ubuntu | `sudo apt install ./piddle_0.5.0_amd64.deb ./piddle-gui_0.5.0_amd64.deb` |
-| Fedora, RHEL, openSUSE | `sudo dnf install ./piddle-0.5.0-1.x86_64.rpm ./piddle-gui-0.5.0-1.x86_64.rpm` |
-| Arch Linux | `sudo pacman -U piddle-0.5.0-1-x86_64.pkg.tar.zst piddle-gui-0.5.0-1-x86_64.pkg.tar.zst` |
+| Debian, Ubuntu | `sudo apt install ./piddle_0.5.1_amd64.deb ./piddle-gui_0.5.1_amd64.deb` |
+| Fedora, RHEL, openSUSE | `sudo dnf install ./piddle-0.5.1-1.x86_64.rpm ./piddle-gui-0.5.1-1.x86_64.rpm` |
+| Arch Linux | `sudo pacman -U piddle-0.5.1-1-x86_64.pkg.tar.zst piddle-gui-0.5.1-1-x86_64.pkg.tar.zst` |
 
 Remove with `apt remove`, `dnf remove` or `pacman -R` and the package names.
 
